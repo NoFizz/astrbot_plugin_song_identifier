@@ -1,0 +1,5 @@
+name: astrbot_plugin_song_identifier
+desc: 引用语音/视频消息识曲插件（ACRCloud + Shazam 多引擎）
+version: v1.0.0
+author: NoFizz
+repo: https://github.com/NoFizz/astrbot_plugin_song_identifier

@@ -1,0 +1,53 @@
+{
+    "trigger_keyword": {
+        "description": "触发关键词（@bot 后输入该词 + 引用消息）",
+        "type": "string",
+        "default": "识曲"
+    },
+    "acrcloud_host": {
+        "description": "ACRCloud 区域主机，如 identify-cn-north-1.acrcloud.com",
+        "type": "string",
+        "default": ""
+    },
+    "acrcloud_access_key": {
+        "description": "ACRCloud Access Key",
+        "type": "string",
+        "default": ""
+    },
+    "acrcloud_access_secret": {
+        "description": "ACRCloud Access Secret",
+        "type": "string",
+        "default": ""
+    },
+    "enable_shazam_fallback": {
+        "description": "ACRCloud 识别失败时是否启用 Shazam 备用引擎",
+        "type": "bool",
+        "default": true
+    },
+    "output_title": {
+        "description": "输出歌名",
+        "type": "bool",
+        "default": true
+    },
+    "output_artist": {
+        "description": "输出歌手",
+        "type": "bool",
+        "default": true
+    },
+    "output_link": {
+        "description": "输出试听链接",
+        "type": "bool",
+        "default": true
+    },
+    "output_format": {
+        "description": "输出形式：text=纯文本，image=图片卡片（带专辑封面），card=QQ音乐卡片",
+        "type": "string",
+        "options": ["text", "image", "card"],
+        "default": "text"
+    },
+    "identify_timeout": {
+        "description": "识别超时（秒）",
+        "type": "int",
+        "default": 30
+    }
+}

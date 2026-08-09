@@ -794,59 +794,111 @@ def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:
 
 
 class SongEnricher:
-    """用歌名+歌手在 txqq.pro 聚合搜索，补全国内平台封面/试听链接/歌曲ID。"""
+    """用歌名+歌手在网易云音乐搜索，补全歌曲 ID/封面/试听链接。
 
-    SEARCH_URL = "https://music.txqq.pro/"
+    网易云搜索质量与稳定性优于聚合站（txqq.pro 已改版失效）；song_id 为
+    网易云歌曲 ID，可直接生成 music.163.com 试听链接并支持 QQ 音乐
+    163 卡片（CQ:music type=163）。
+    """
 
-    def __init__(self, platform: str = "qq"):
-        self.platform = platform
+    SEARCH_URL = "https://music.163.com/api/search/get/web"
+    DETAIL_URL = "https://music.163.com/api/song/detail/"
+
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        ),
+        "Referer": "https://music.163.com",
+        "Cookie": "appver=2.0.2",
+    }
 
     async def enrich(self, song: SongInfo) -> SongInfo:
+        """用网易云搜索补全歌曲信息；失败或未命中返回原对象（不修改入参）。
+
+        Args:
+            song: 识别引擎返回的歌曲信息。
+
+        Returns:
+            增强后的 SongInfo（source 置为 "netease"）；失败时返回原对象。
+        """
         query = f"{song.title or ''} {song.artist or ''}".strip()
         if not query:
             return song
-        logger.info(f"[识曲] 增强查询: '{query}' (platform={self.platform})")
+        logger.info(f"[识曲] 增强查询(网易云): '{query}'")
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.post(
+                resp = await client.get(
                     self.SEARCH_URL,
-                    data={
-                        "input": query,
-                        "filter": "name",
-                        "type": self.platform,
-                        "page": 1,
-                    },
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/120.0 Safari/537.36"
-                        ),
-                        "Referer": self.SEARCH_URL,
-                    },
+                    params={"s": query, "type": 1, "limit": 1},
+                    headers=self.HEADERS,
                 )
+                logger.info(
+                    f"[识曲] 网易云搜索: HTTP {resp.status_code}, "
+                    f"{len(resp.content)} bytes"
+                )
+                logger.info(f"[识曲] 网易云搜索响应: {resp.text[:200]}")
                 resp.raise_for_status()
                 payload = resp.json()
+                songs = ((payload.get("result") or {}).get("songs")) or []
+                if not songs:
+                    logger.info("[识曲] 增强未命中，使用识别引擎原始信息")
+                    return song
+                first = songs[0]
+                artists = ", ".join(
+                    a.get("name", "")
+                    for a in (first.get("artists") or [])
+                    if a.get("name")
+                )
+                song_id = str(first.get("id") or "")
+                logger.info(
+                    f"[识曲] 增强命中: {first.get('name')} - {artists} "
+                    f"(id={song_id})"
+                )
+                cover_url = (
+                    await self._fetch_cover(client, song_id) if song_id else None
+                )
+                return SongInfo(
+                    title=song.title,
+                    artist=song.artist,
+                    album=song.album,
+                    cover_url=cover_url or song.cover_url,
+                    audio_url=song.audio_url,
+                    song_id=song_id or song.song_id,
+                    source="netease",
+                )
         except Exception as e:
             logger.warning(f"[识曲] 增强失败: {e}")
             return song
-        items = []
-        if isinstance(payload, dict):
-            items = payload.get("data") or []
-        if not items:
-            logger.info("[识曲] 增强未命中，使用识别引擎原始信息")
-            return song
-        logger.info(f"[识曲] 增强命中 {len(items)} 条，取第一条")
-        first = items[0]
-        return SongInfo(
-            title=song.title,
-            artist=song.artist,
-            album=song.album,
-            cover_url=first.get("pic") or song.cover_url,
-            audio_url=first.get("url") or first.get("link") or song.audio_url,
-            song_id=str(first.get("songid") or "") or song.song_id,
-            source=song.source,
-        )
+
+    async def _fetch_cover(self, client, song_id: str) -> str | None:
+        """按歌曲 ID 查询网易云详情，获取专辑封面 URL。
+
+        Args:
+            client: httpx.AsyncClient 实例。
+            song_id: 网易云歌曲 ID。
+
+        Returns:
+            封面 URL；查询失败时返回 None。
+        """
+        try:
+            resp = await client.get(
+                self.DETAIL_URL,
+                params={"id": song_id, "ids": f"[{song_id}]"},
+                headers=self.HEADERS,
+            )
+            if resp.status_code != 200:
+                return None
+            payload = resp.json()
+            detail_songs = payload.get("songs") or []
+            if not detail_songs:
+                return None
+            album = detail_songs[0].get("album") or {}
+            return album.get("picUrl")
+        except Exception as e:
+            logger.warning(f"[识曲] 封面获取失败: {e}")
+            return None
 
 
 class ResultFormatter:
@@ -979,7 +1031,7 @@ class SongIdentifierPlugin(Star):
             max_seconds=int(config.get("audio_max_seconds", 30))
         )
         self.identifier, self.humming_engine = build_engines(config)
-        self.enricher = SongEnricher(platform="qq")
+        self.enricher = SongEnricher()
         self.formatter = ResultFormatter(config)
 
     @filter.event_message_type(EventMessageType.ALL)

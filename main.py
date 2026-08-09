@@ -514,3 +514,66 @@ class XfyunHummingEngine:
         if proc.returncode != 0 or not os.path.exists(out_path):
             return None
         return out_path
+
+
+class SongIdentifier:
+    """多引擎级联识别：按配置顺序依次尝试，返回第一个成功结果。"""
+
+    def __init__(self, engines: list, timeout: float):
+        self.engines = engines
+        self.timeout = timeout
+
+    async def identify(self, audio_path: str, session) -> SongInfo | None:
+        async with asyncio.timeout(self.timeout):
+            for engine in self.engines:
+                try:
+                    if not engine.is_configured():
+                        continue
+                    info = await engine.identify(audio_path, session)
+                    if info is not None:
+                        return info
+                except Exception:
+                    continue
+            return None
+
+
+def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:
+    """按配置构造引擎链和哼唱引擎。
+
+    Args:
+        config: 插件配置 dict。
+
+    Returns:
+        (SongIdentifier, XfyunHummingEngine) 元组。
+    """
+    engine_map = {
+        "xfyun": XfyunAcrEngine(
+            app_id=config.get("xfyun_app_id", ""),
+            api_key=config.get("xfyun_api_key", ""),
+            api_secret=config.get("xfyun_api_secret", ""),
+        ),
+        "acrcloud": AcrcloudEngine(
+            host=config.get("acrcloud_host", ""),
+            access_key=config.get("acrcloud_access_key", ""),
+            access_secret=config.get("acrcloud_access_secret", ""),
+        ),
+    }
+    if config.get("enable_shazam_fallback", True):
+        engine_map["shazam"] = ShazamEngine()
+
+    engines = []
+    added = set()
+    order = str(config.get("engine_order", "xfyun,acrcloud,shazam"))
+    for name in [n.strip() for n in order.split(",")]:
+        if name in engine_map and name not in added:
+            engines.append(engine_map[name])
+            added.add(name)
+
+    humming = XfyunHummingEngine(
+        app_id=config.get("xfyun_humming_app_id", "") or config.get("xfyun_app_id", ""),
+        api_key=config.get("xfyun_humming_api_key", "")
+        or config.get("xfyun_api_key", ""),
+    )
+    return SongIdentifier(
+        engines=engines, timeout=float(config.get("identify_timeout", 30))
+    ), humming

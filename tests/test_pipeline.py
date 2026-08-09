@@ -7,7 +7,23 @@ from astrbot_plugin_song_identifier.main import (
     SongInfo,
 )
 
-from astrbot.api.message_components import At, Plain, Record, Reply
+from astrbot.api.message_components import At, Image, Plain, Record, Reply
+
+
+class FakeApi:
+    def __init__(self, should_raise=False):
+        self.calls = []
+        self.should_raise = should_raise
+
+    async def call_action(self, action, **kwargs):
+        if self.should_raise:
+            raise RuntimeError("send failed")
+        self.calls.append((action, kwargs))
+
+
+class FakeBot:
+    def __init__(self, should_raise=False):
+        self.api = FakeApi(should_raise)
 
 
 class FakeEnricher:
@@ -24,9 +40,10 @@ class FakeIdentifier:
 
 
 class MockEvent:
-    def __init__(self, messages, message_str=""):
+    def __init__(self, messages, message_str="", bot=None):
         self._messages = messages
         self.message_str = message_str
+        self.bot = bot
         self.sent = []
         self.stopped = False
 
@@ -47,6 +64,9 @@ class MockEvent:
 
     def plain_result(self, text):
         return {"type": "plain", "text": text}
+
+    def chain_result(self, chain):
+        return {"type": "chain", "chain": chain}
 
     async def send(self, result):
         self.sent.append(result)
@@ -189,3 +209,127 @@ async def test_pipeline_not_trigger_ignored():
     await plugin.on_message(ev)
     assert ev.sent == []
     assert ev.stopped is False
+
+
+@pytest.mark.asyncio
+async def test_pipeline_image_mode(monkeypatch):
+    plugin = make_plugin(
+        identifier_result=SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
+    )
+    plugin.config["output_format"] = "image"
+
+    async def fake_build_image(song):
+        return b"FAKEJPEG"
+
+    monkeypatch.setattr(plugin.formatter, "build_image", fake_build_image)
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲"
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 1
+    assert ev.sent[0]["type"] == "chain"
+    assert any(isinstance(comp, Image) for comp in ev.sent[0]["chain"])
+    assert ev.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_card_mode_group_success(monkeypatch):
+    plugin = make_plugin(
+        identifier_result=SongInfo(
+            title="晴天", artist="周杰伦", audio_url="http://a.mp3", source="acrcloud"
+        )
+    )
+    plugin.config["output_format"] = "card"
+
+    bot = FakeBot()
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply],
+        message_str="识曲",
+        bot=bot,
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(bot.api.calls) == 1
+    action, payload = bot.api.calls[0]
+    assert action == "send_group_msg"
+    assert payload["group_id"] == "g1"
+    assert payload["message"][0]["data"]["title"] == "晴天"
+    assert ev.sent == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_card_failure_falls_back_to_text(monkeypatch):
+    plugin = make_plugin(
+        identifier_result=SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
+    )
+    plugin.config["output_format"] = "card"
+
+    bot = FakeBot(should_raise=True)
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply],
+        message_str="识曲",
+        bot=bot,
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 1
+    assert "晴天" in ev.sent[0]["text"]
+    assert ev.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_materialize_failed_hint(monkeypatch):
+    plugin = make_plugin(identifier_result=SongInfo(title="晴天", source="acrcloud"))
+
+    async def fake_materialize(self, comp):
+        return None
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲"
+    )
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 1
+    assert "媒体文件获取失败" in ev.sent[0]["text"]
+    assert ev.stopped is True

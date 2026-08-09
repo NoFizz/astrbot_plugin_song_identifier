@@ -17,6 +17,7 @@ import aiohttp
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 
+from astrbot.api import logger
 from astrbot.api import message_components as Comp
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At, File, Record, Reply, Video
@@ -180,8 +181,24 @@ class MediaMaterializer:
             )
         except OSError:
             return None
-        await proc.wait()
-        if proc.returncode != 0 or not os.path.exists(out_path):
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=60)
+            failed = proc.returncode != 0 or not os.path.exists(out_path)
+        except asyncio.TimeoutError:
+            proc.kill()
+            failed = True
+        except asyncio.CancelledError:
+            proc.kill()
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
+            raise
+        if failed:
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
             return None
         return out_path
 
@@ -276,6 +293,8 @@ class ShazamEngine:
         if not out or not out.get("track"):
             return None
         track = out["track"]
+        if not track.get("title"):
+            return None
         return SongInfo(
             title=track.get("title"),
             artist=track.get("subtitle") or None,
@@ -411,8 +430,24 @@ class XfyunAcrEngine:
             )
         except OSError:
             return None
-        await proc.wait()
-        if proc.returncode != 0 or not os.path.exists(mp3_path):
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=60)
+            failed = proc.returncode != 0 or not os.path.exists(mp3_path)
+        except asyncio.TimeoutError:
+            proc.kill()
+            failed = True
+        except asyncio.CancelledError:
+            proc.kill()
+            try:
+                os.unlink(mp3_path)
+            except OSError:
+                pass
+            raise
+        if failed:
+            try:
+                os.unlink(mp3_path)
+            except OSError:
+                pass
             return None
         return mp3_path
 
@@ -454,6 +489,8 @@ def parse_qbh_response(payload: dict) -> SongInfo | None:
     if not data:
         return None
     first = data[0]
+    if not first.get("song"):
+        return None
     return SongInfo(
         title=first.get("song"),
         artist=first.get("singer") or None,
@@ -535,8 +572,24 @@ class XfyunHummingEngine:
             )
         except OSError:
             return None
-        await proc.wait()
-        if proc.returncode != 0 or not os.path.exists(out_path):
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=60)
+            failed = proc.returncode != 0 or not os.path.exists(out_path)
+        except asyncio.TimeoutError:
+            proc.kill()
+            failed = True
+        except asyncio.CancelledError:
+            proc.kill()
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
+            raise
+        if failed:
+            try:
+                os.unlink(out_path)
+            except OSError:
+                pass
             return None
         return out_path
 
@@ -557,7 +610,8 @@ class SongIdentifier:
                     info = await engine.identify(audio_path, session)
                     if info is not None:
                         return info
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"engine {type(engine).__name__} failed: {e}")
                     continue
             return None
 
@@ -639,7 +693,8 @@ class SongEnricher:
                 )
                 resp.raise_for_status()
                 payload = resp.json()
-        except Exception:
+        except Exception as e:
+            logger.warning(f"enrich failed: {e}")
             return song
         items = []
         if isinstance(payload, dict):
@@ -730,10 +785,22 @@ class ResultFormatter:
                 data = await resp.read()
         return Image.open(io.BytesIO(data)).convert("RGB")
 
-    def build_card_payload(self, song: SongInfo, group_id: str) -> dict:
-        """构造 CQ:music custom 卡片发送 payload。"""
+    def build_card_payload(
+        self, song: SongInfo, target_id: str, is_private: bool = False
+    ) -> dict:
+        """构造 CQ:music custom 卡片发送 payload。
+
+        Args:
+            song: 识别到的歌曲信息。
+            target_id: 群号（群聊）或用户号（私聊）。
+            is_private: 是否为私聊（使用 user_id 键）。
+
+        Returns:
+            可直接传给 call_action 的 payload dict。
+        """
+        key = "user_id" if is_private else "group_id"
         return {
-            "group_id": group_id,
+            key: target_id,
             "message": [
                 {
                     "type": "music",
@@ -865,28 +932,18 @@ class SongIdentifierPlugin(Star):
             return False
         try:
             if event.is_private_chat():
-                payload = {
-                    "user_id": event.get_sender_id(),
-                    "message": [
-                        {
-                            "type": "music",
-                            "data": {
-                                "type": "custom",
-                                "url": song.audio_url or "",
-                                "audio": song.audio_url or "",
-                                "title": song.title or "",
-                                "image": song.cover_url or "",
-                                "singer": song.artist or "",
-                            },
-                        }
-                    ],
-                }
-                await bot.api.call_action("send_private_msg", **payload)
+                await bot.api.call_action(
+                    "send_private_msg",
+                    **self.formatter.build_card_payload(
+                        song, event.get_sender_id(), is_private=True
+                    ),
+                )
             else:
                 await bot.api.call_action(
                     "send_group_msg",
                     **self.formatter.build_card_payload(song, event.get_group_id()),
                 )
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"card send failed: {e}")
             return False

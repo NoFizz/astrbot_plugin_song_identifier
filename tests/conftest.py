@@ -3,8 +3,10 @@ pytest 配置文件
 提供路径注入、astrbot 真实导入（失败时回退 stub）与 mock_event 夹具。
 """
 
+import logging
 import sys
 import types
+import warnings
 from enum import Flag
 from pathlib import Path
 
@@ -142,6 +144,7 @@ def _install_astrbot_stubs() -> None:
 
     api_mod = _package("astrbot.api")
     astrbot_mod.api = api_mod
+    api_mod.logger = logging.getLogger("astrbot.stub")
 
     event_mod = _package("astrbot.api.event")
     event_mod.AstrMessageEvent = AstrMessageEvent
@@ -198,6 +201,7 @@ try:
         EventMessageType,
     )
 except Exception:
+    warnings.warn("astrbot real import failed; using stubs", stacklevel=2)
     _install_astrbot_stubs()
 
 

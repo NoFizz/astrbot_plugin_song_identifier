@@ -1195,14 +1195,37 @@ class ResultFormatter:
         self.cfg = cfg
 
     def format_text(self, song: SongInfo) -> str:
-        """格式化歌曲文本（歌名/歌手，不含链接——链接由独立消息发送）。"""
-        parts = []
-        if _cfg(self.cfg, "output", "title", default=True) and song.title:
-            parts.append(song.title)
-        if _cfg(self.cfg, "output", "artist", default=True) and song.artist:
-            parts.append(song.artist)
-        text = " - ".join(parts)
-        return text.strip() or "未能获取歌曲信息"
+        """按用户模板格式化歌曲文本（不含链接——链接由独立消息发送）。
+
+        模板支持 {title}/{artist}/{album} 占位符；album 仅 ACRCloud 系
+        引擎（acrcloud/xfyun）有值，其他引擎或对应开关关闭时占位符替换为空。
+
+        Args:
+            song: 歌曲信息。
+
+        Returns:
+            格式化后的文本；结果为空时返回兜底提示。
+        """
+        template = (
+            _cfg(self.cfg, "output", "text_template", default="{title} - {artist}")
+            or "{title} - {artist}"
+        )
+        title_enabled = _cfg(self.cfg, "output", "title", default=True)
+        artist_enabled = _cfg(self.cfg, "output", "artist", default=True)
+        values = {
+            "title": song.title if (title_enabled and song.title) else "",
+            "artist": song.artist if (artist_enabled and song.artist) else "",
+            "album": song.album or "",
+        }
+        text = template
+        for key, value in values.items():
+            text = text.replace("{" + key + "}", value)
+        # 折叠占位符为空后残留的连续空白与分隔符（如 "A - {album} - B" 中 album 为空）
+        import re
+
+        text = re.sub(r"\s*-\s*(?=-)", "", text)
+        text = re.sub(r"\s{2,}", " ", text)
+        return text.strip(" -") or "未能获取歌曲信息"
 
     def _build_link(self, song: SongInfo) -> str | None:
         if song.audio_url:
@@ -1384,7 +1407,12 @@ class SongIdentifierPlugin(Star):
             event: 消息事件。
             song: 识别到的歌曲信息。
         """
-        fmt = _cfg(self.config, "output", "format", default="text")
+        fmt_label = _cfg(self.config, "output", "format", default="文本") or "文本"
+        fmt = {
+            "文本": "text",
+            "图片": "image",
+            "卡片": "card",
+        }.get(str(fmt_label).strip(), "text")
         logger.info(f"[识曲] 输出格式: {fmt}")
         if fmt == "card":
             ok = await self._try_send_card(event, song)

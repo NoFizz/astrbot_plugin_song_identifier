@@ -135,12 +135,18 @@
                 "description": "输出形式",
                 "type": "string",
                 "options": [
-                    "text",
-                    "image",
-                    "card"
+                    "文本",
+                    "图片",
+                    "卡片"
                 ],
-                "default": "text",
-                "hint": "text=纯文本；image=图片卡片（含专辑封面）；card=QQ 音乐卡片（发送失败自动降级为文本）"
+                "default": "文本",
+                "hint": "文本=纯文本（格式可用下方模板自定义）；图片=图片卡片（含专辑封面）；卡片=QQ 音乐卡片（发送失败自动降级为文本）"
+            },
+            "text_template": {
+                "description": "文本输出模板",
+                "type": "string",
+                "default": "{title} - {artist}",
+                "hint": "文本模式的输出格式，可用占位符：{title} 歌名、{artist} 歌手、{album} 专辑。专辑占位符仅 ACRCloud 系引擎（ACRCloud、讯飞开放平台 ACRCloud）有值，使用其他引擎时自动忽略该占位符；上方「输出歌名/歌手」开关关闭时对应占位符同样被忽略"
             },
             "title": {
                 "description": "输出歌名",

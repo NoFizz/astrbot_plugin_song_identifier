@@ -6,8 +6,11 @@ from PIL import Image, ImageFont
 from astrbot_plugin_song_identifier.main import ResultFormatter, SongInfo
 
 
-def make_cfg(title=True, artist=True, link=True, fmt="text"):
-    return {"output": {"title": title, "artist": artist, "link": link, "format": fmt}}
+def make_cfg(title=True, artist=True, link=True, fmt="文本", text_template=None):
+    cfg = {"output": {"title": title, "artist": artist, "link": link, "format": fmt}}
+    if text_template:
+        cfg["output"]["text_template"] = text_template
+    return cfg
 
 
 def test_text_with_all_switches():
@@ -52,6 +55,33 @@ def test_format_link_netease_source_uses_music163_page():
 def test_text_empty_song_falls_back():
     fmt = ResultFormatter(make_cfg(title=False, artist=False, link=False))
     assert fmt.format_text(SongInfo()) == "未能获取歌曲信息"
+
+
+def test_text_template_with_album():
+    """自定义模板：album 占位符在 ACRCloud 系引擎（有专辑名）时生效。"""
+    fmt = ResultFormatter(
+        make_cfg(text_template="{title} - {artist} - {album}")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", album="叶惠美", source="acrcloud")
+    assert fmt.format_text(song) == "晴天 - 周杰伦 - 叶惠美"
+
+
+def test_text_template_ignores_empty_album():
+    """非 ACRCloud 系引擎 album 为空：album 占位符被忽略且不留分隔符残留。"""
+    fmt = ResultFormatter(
+        make_cfg(text_template="{title} - {artist} - {album}")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", source="shazam")
+    assert fmt.format_text(song) == "晴天 - 周杰伦"
+
+
+def test_text_template_respects_switches():
+    """输出歌名开关关闭时 {title} 占位符被忽略。"""
+    fmt = ResultFormatter(
+        make_cfg(title=False, text_template="{title} - {artist}")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
+    assert fmt.format_text(song) == "周杰伦"
 
 
 def test_format_link_none_without_id():

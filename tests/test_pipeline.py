@@ -101,7 +101,7 @@ def make_plugin(identifier_result=None):
             "title": True,
             "artist": True,
             "link": True,
-            "format": "text",
+            "format": "文本",
             "card_platforms": {
                 "primary": "网易云音乐",
                 "secondary": "QQ音乐",
@@ -198,7 +198,7 @@ async def test_pipeline_image_mode(monkeypatch):
     plugin = make_plugin(
         identifier_result=SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
     )
-    plugin.config["output"]["format"] = "image"
+    plugin.config["output"]["format"] = "图片"
 
     async def fake_build_image(song):
         return b"FAKEJPEG"
@@ -235,7 +235,7 @@ async def test_pipeline_card_mode_group_success(monkeypatch):
             title="晴天", artist="周杰伦", song_id="487527980", source="netease"
         )
     )
-    plugin.config["output"]["format"] = "card"
+    plugin.config["output"]["format"] = "卡片"
 
     bot = FakeBot()
     record = Record(file="x.amr")
@@ -278,7 +278,7 @@ async def test_pipeline_card_failure_falls_back_to_text(monkeypatch):
             title="晴天", artist="周杰伦", song_id="487527980", source="netease"
         )
     )
-    plugin.config["output"]["format"] = "card"
+    plugin.config["output"]["format"] = "卡片"
     plugin.config["output"]["card_platforms"] = {
         "primary": "网易云音乐",
         "secondary": "留空",
@@ -343,7 +343,7 @@ async def test_pipeline_image_mode_appends_link_when_enabled(monkeypatch):
             title="晴天", artist="周杰伦", song_id="001", source="netease"
         )
     )
-    plugin.config["output"]["format"] = "image"
+    plugin.config["output"]["format"] = "图片"
 
     async def fake_build_image(song):
         return b"FAKEJPEG"
@@ -380,7 +380,7 @@ async def test_pipeline_image_mode_link_disabled(monkeypatch):
             title="晴天", artist="周杰伦", song_id="001", source="netease"
         )
     )
-    plugin.config["output"]["format"] = "image"
+    plugin.config["output"]["format"] = "图片"
     plugin.config["output"]["link"] = False
 
     async def fake_build_image(song):
@@ -468,5 +468,6 @@ async def test_pipeline_text_mode_link_disabled(monkeypatch):
     assert len(ev.sent) == 1
     assert "晴天" in ev.sent[0]["text"]
     assert "🔗" not in ev.sent[0]["text"]
+
 
 

@@ -57,18 +57,23 @@ async def test_cascade_all_fail():
     assert await identifier.identify("/tmp/fake.wav", object()) is None
 
 
-def test_build_engines_order(monkeypatch):
-    config = {
-        "engine_order": "xfyun,acrcloud,shazam",
-        "xfyun_app_id": "A",
-        "xfyun_api_key": "K",
-        "xfyun_api_secret": "S",
-        "acrcloud_host": "h",
-        "acrcloud_access_key": "K",
-        "acrcloud_access_secret": "S",
-        "enable_shazam_fallback": True,
+def make_engines_config(order, shazam_enabled=True):
+    return {
+        "engines": {
+            "order": order,
+            "shazam": {"enabled": shazam_enabled},
+            "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
+            "acrcloud": {"host": "h", "access_key": "K", "access_secret": "S"},
+            "xfyun_humming": {"app_id": "", "api_key": ""},
+        },
+        "advanced": {"identify_timeout": 30},
     }
-    identifier, humming = build_engines(config)
+
+
+def test_build_engines_order(monkeypatch):
+    identifier, humming = build_engines(
+        make_engines_config("xfyun,acrcloud,shazam")
+    )
     engines = identifier.engines
     assert isinstance(engines[0], XfyunAcrEngine)
     assert isinstance(engines[1], AcrcloudEngine)
@@ -77,35 +82,32 @@ def test_build_engines_order(monkeypatch):
 
 
 def test_build_engines_skips_unknown_and_empty(monkeypatch):
-    config = {
-        "engine_order": "shazam,,unknown",
-        "xfyun_app_id": "A",
-        "xfyun_api_key": "K",
-        "xfyun_api_secret": "S",
-        "acrcloud_host": "h",
-        "acrcloud_access_key": "K",
-        "acrcloud_access_secret": "S",
-        "enable_shazam_fallback": True,
-    }
-    identifier, _ = build_engines(config)
+    identifier, _ = build_engines(make_engines_config("shazam,,unknown"))
     names = [type(e).__name__ for e in identifier.engines]
     assert names == ["ShazamEngine"]
 
 
 def test_build_engines_shazam_disabled():
-    config = {
-        "engine_order": "xfyun,shazam",
-        "xfyun_app_id": "A",
-        "xfyun_api_key": "K",
-        "xfyun_api_secret": "S",
-        "acrcloud_host": "h",
-        "acrcloud_access_key": "K",
-        "acrcloud_access_secret": "S",
-        "enable_shazam_fallback": False,
-    }
-    identifier, _ = build_engines(config)
+    identifier, _ = build_engines(make_engines_config("xfyun,shazam", shazam_enabled=False))
     names = [type(e).__name__ for e in identifier.engines]
     assert names == ["XfyunAcrEngine"]
+
+
+def test_build_engines_humming_falls_back_to_xfyun_keys():
+    """哼唱引擎未单独配置时复用讯飞 ACRCloud 凭据。"""
+    config = {
+        "engines": {
+            "order": "xfyun",
+            "shazam": {"enabled": False},
+            "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
+            "acrcloud": {"host": "h", "access_key": "K", "access_secret": "S"},
+            "xfyun_humming": {"app_id": "", "api_key": ""},
+        },
+        "advanced": {"identify_timeout": 30},
+    }
+    _, humming = build_engines(config)
+    assert humming.app_id == "A"
+    assert humming.api_key == "K"
 
 
 @pytest.mark.asyncio

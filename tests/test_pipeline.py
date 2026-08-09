@@ -84,23 +84,27 @@ def make_plugin(identifier_result=None, humming_result=None):
 
     plugin = SongIdentifierPlugin.__new__(SongIdentifierPlugin)
     plugin.config = {
-        "trigger_keyword": "识曲",
-        "humming_keyword": "哼唱",
-        "engine_order": "xfyun,acrcloud,shazam",
-        "enable_shazam_fallback": True,
-        "output_title": True,
-        "output_artist": True,
-        "output_link": True,
-        "output_format": "text",
-        "identify_timeout": 30,
-        "xfyun_app_id": "A",
-        "xfyun_api_key": "K",
-        "xfyun_api_secret": "S",
-        "acrcloud_host": "h",
-        "acrcloud_access_key": "K",
-        "acrcloud_access_secret": "S",
-        "xfyun_humming_app_id": "A",
-        "xfyun_humming_api_key": "K",
+        "trigger": {
+            "keyword": "识曲",
+            "humming_keyword": "哼唱",
+        },
+        "engines": {
+            "order": "xfyun,acrcloud,shazam",
+            "shazam": {"enabled": True},
+            "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
+            "acrcloud": {"host": "h", "access_key": "K", "access_secret": "S"},
+            "xfyun_humming": {"app_id": "A", "api_key": "K"},
+        },
+        "output": {
+            "title": True,
+            "artist": True,
+            "link": True,
+            "format": "text",
+        },
+        "advanced": {
+            "identify_timeout": 30,
+            "audio_max_seconds": 30,
+        },
     }
     plugin.detector = TriggerDetector("识曲", "哼唱")
     plugin.materializer = MediaMaterializer()
@@ -216,7 +220,7 @@ async def test_pipeline_image_mode(monkeypatch):
     plugin = make_plugin(
         identifier_result=SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
     )
-    plugin.config["output_format"] = "image"
+    plugin.config["output"]["format"] = "image"
 
     async def fake_build_image(song):
         return b"FAKEJPEG"
@@ -252,7 +256,7 @@ async def test_pipeline_card_mode_group_success(monkeypatch):
             title="晴天", artist="周杰伦", audio_url="http://a.mp3", source="acrcloud"
         )
     )
-    plugin.config["output_format"] = "card"
+    plugin.config["output"]["format"] = "card"
 
     bot = FakeBot()
     record = Record(file="x.amr")
@@ -288,7 +292,7 @@ async def test_pipeline_card_failure_falls_back_to_text(monkeypatch):
     plugin = make_plugin(
         identifier_result=SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
     )
-    plugin.config["output_format"] = "card"
+    plugin.config["output"]["format"] = "card"
 
     bot = FakeBot(should_raise=True)
     record = Record(file="x.amr")
@@ -345,7 +349,7 @@ async def test_pipeline_image_mode_appends_link_when_enabled(monkeypatch):
             title="晴天", artist="周杰伦", song_id="001", source="netease"
         )
     )
-    plugin.config["output_format"] = "image"
+    plugin.config["output"]["format"] = "image"
 
     async def fake_build_image(song):
         return b"FAKEJPEG"
@@ -382,8 +386,8 @@ async def test_pipeline_image_mode_link_disabled(monkeypatch):
             title="晴天", artist="周杰伦", song_id="001", source="netease"
         )
     )
-    plugin.config["output_format"] = "image"
-    plugin.config["output_link"] = False
+    plugin.config["output"]["format"] = "image"
+    plugin.config["output"]["link"] = False
 
     async def fake_build_image(song):
         return b"FAKEJPEG"
@@ -408,3 +412,66 @@ async def test_pipeline_image_mode_link_disabled(monkeypatch):
     await plugin.on_message(ev)
     assert len(ev.sent) == 1
     assert ev.sent[0]["type"] == "chain"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_text_mode_splits_song_and_link(monkeypatch):
+    """text 模式 + 有链接：先发歌曲内容，再分条发送试听链接。"""
+    plugin = make_plugin(
+        identifier_result=SongInfo(
+            title="晴天", artist="周杰伦", song_id="001", source="netease"
+        )
+    )
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲"
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 2
+    assert "晴天" in ev.sent[0]["text"]
+    assert "🔗" in ev.sent[1]["text"]
+    assert "https://music.163.com/song/001" in ev.sent[1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_text_mode_link_disabled(monkeypatch):
+    """text 模式 + 链接关闭：只发歌曲内容一条。"""
+    plugin = make_plugin(
+        identifier_result=SongInfo(
+            title="晴天", artist="周杰伦", song_id="001", source="netease"
+        )
+    )
+    plugin.config["output"]["link"] = False
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲"
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 1
+    assert "晴天" in ev.sent[0]["text"]
+    assert "🔗" not in ev.sent[0]["text"]
+

@@ -1,93 +1,168 @@
 {
-    "trigger_keyword": {
-        "description": "触发关键词（@bot 后输入该词 + 引用消息）",
-        "type": "string",
-        "default": "识曲"
+    "trigger": {
+        "description": "触发设置",
+        "type": "object",
+        "hint": "触发识曲的消息条件：引用语音/视频消息 + @bot + 触发关键词（私聊无需 @）",
+        "items": {
+            "keyword": {
+                "description": "识曲触发关键词",
+                "type": "string",
+                "default": "识曲",
+                "hint": "引用语音/视频消息后 @bot 并发送该词，触发多引擎音乐识别"
+            },
+            "humming_keyword": {
+                "description": "哼唱识别触发关键词",
+                "type": "string",
+                "default": "哼唱",
+                "hint": "引用语音消息后 @bot 并发送该词，走讯飞哼唱识别（识别哼唱的旋律）"
+            }
+        }
     },
-    "acrcloud_host": {
-        "description": "ACRCloud 区域主机，如 identify-cn-north-1.acrcloud.com",
-        "type": "string",
-        "default": ""
+    "engines": {
+        "description": "识别引擎",
+        "type": "object",
+        "hint": "配置各识曲引擎的凭据与优先级；未配置凭据的引擎会自动跳过",
+        "items": {
+            "order": {
+                "description": "引擎顺序",
+                "type": "string",
+                "options": [
+                    "xfyun,acrcloud,shazam",
+                    "acrcloud,xfyun,shazam",
+                    "xfyun,acrcloud",
+                    "acrcloud,shazam",
+                    "xfyun,shazam",
+                    "shazam"
+                ],
+                "default": "xfyun,acrcloud,shazam",
+                "hint": "按顺序依次尝试，第一个识别成功的引擎生效；未配置凭据的引擎自动跳过"
+            },
+            "shazam": {
+                "description": "Shazam 备用引擎",
+                "type": "object",
+                "items": {
+                    "enabled": {
+                        "description": "启用 Shazam",
+                        "type": "bool",
+                        "default": true,
+                        "hint": "免费但为非官方接口，在其他引擎失败时作为兜底"
+                    }
+                }
+            },
+            "xfyun": {
+                "description": "讯飞 ACRCloud（音乐识别）",
+                "type": "object",
+                "hint": "讯飞开放平台 console.xfyun.cn → 创建应用 → 语音扩展 → 歌曲识别 ACRCloud 页面获取（均为 32 位字符串）",
+                "items": {
+                    "app_id": {
+                        "description": "AppID",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "api_key": {
+                        "description": "APIKey",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "api_secret": {
+                        "description": "APISecret",
+                        "type": "string",
+                        "default": ""
+                    }
+                }
+            },
+            "xfyun_humming": {
+                "description": "讯飞歌曲识别（哼唱）",
+                "type": "object",
+                "hint": "同一应用开通歌曲识别（qbh）服务；留空时自动复用上方讯飞 ACRCloud 凭据",
+                "items": {
+                    "app_id": {
+                        "description": "AppID（留空复用上方）",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "api_key": {
+                        "description": "APIKey（留空复用上方）",
+                        "type": "string",
+                        "default": ""
+                    }
+                }
+            },
+            "acrcloud": {
+                "description": "ACRCloud 官方",
+                "type": "object",
+                "hint": "console.acrcloud.cn 注册获取；host 如 identify-cn-north-1.acrcloud.cn",
+                "items": {
+                    "host": {
+                        "description": "识别服务主机",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "access_key": {
+                        "description": "Access Key",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "access_secret": {
+                        "description": "Access Secret",
+                        "type": "string",
+                        "default": ""
+                    }
+                }
+            }
+        }
     },
-    "acrcloud_access_key": {
-        "description": "ACRCloud Access Key",
-        "type": "string",
-        "default": ""
+    "output": {
+        "description": "输出设置",
+        "type": "object",
+        "hint": "识别成功后的回复形式与内容开关",
+        "items": {
+            "format": {
+                "description": "输出形式",
+                "type": "string",
+                "options": [
+                    "text",
+                    "image",
+                    "card"
+                ],
+                "default": "text",
+                "hint": "text=纯文本；image=图片卡片（含专辑封面）；card=QQ 音乐卡片（发送失败自动降级为文本）"
+            },
+            "title": {
+                "description": "输出歌名",
+                "type": "bool",
+                "default": true
+            },
+            "artist": {
+                "description": "输出歌手",
+                "type": "bool",
+                "default": true
+            },
+            "link": {
+                "description": "输出试听链接",
+                "type": "bool",
+                "default": true,
+                "hint": "所有输出形式生效：text 模式内嵌链接，image/card 模式在主内容后附加发送"
+            }
+        }
     },
-    "acrcloud_access_secret": {
-        "description": "ACRCloud Access Secret",
-        "type": "string",
-        "default": ""
-    },
-    "enable_shazam_fallback": {
-        "description": "ACRCloud 识别失败时是否启用 Shazam 备用引擎",
-        "type": "bool",
-        "default": true
-    },
-    "output_title": {
-        "description": "输出歌名",
-        "type": "bool",
-        "default": true
-    },
-    "output_artist": {
-        "description": "输出歌手",
-        "type": "bool",
-        "default": true
-    },
-    "output_link": {
-        "description": "输出试听链接",
-        "type": "bool",
-        "default": true
-    },
-    "output_format": {
-        "description": "输出形式：text=纯文本，image=图片卡片（带专辑封面），card=QQ音乐卡片",
-        "type": "string",
-        "options": ["text", "image", "card"],
-        "default": "text"
-    },
-    "identify_timeout": {
-        "description": "识别超时（秒）",
-        "type": "int",
-        "default": 30
-    },
-    "humming_keyword": {
-        "description": "哼唱识别触发关键词（引用语音消息 + @bot + 该词，走讯飞哼唱识别）",
-        "type": "string",
-        "default": "哼唱"
-    },
-    "engine_order": {
-        "description": "音乐识别引擎顺序，逗号分隔：xfyun,acrcloud,shazam",
-        "type": "string",
-        "default": "xfyun,acrcloud,shazam"
-    },
-    "xfyun_app_id": {
-        "description": "讯飞开放平台应用 AppID（歌曲识别 ACRCloud 音乐识别）",
-        "type": "string",
-        "default": ""
-    },
-    "xfyun_api_key": {
-        "description": "讯飞 APIKey（歌曲识别 ACRCloud 音乐识别）",
-        "type": "string",
-        "default": ""
-    },
-    "xfyun_api_secret": {
-        "description": "讯飞 APISecret（歌曲识别 ACRCloud 音乐识别）",
-        "type": "string",
-        "default": ""
-    },
-    "xfyun_humming_app_id": {
-        "description": "讯飞 AppID（歌曲识别 qbh 哼唱识别，可与上面相同）",
-        "type": "string",
-        "default": ""
-    },
-    "xfyun_humming_api_key": {
-        "description": "讯飞 APIKey（歌曲识别 qbh 哼唱识别）",
-        "type": "string",
-        "default": ""
-    },
-    "audio_max_seconds": {
-        "description": "视频抽音轨时截取的最大时长（秒）。识曲引擎建议识别内容小于 12 秒、文件小于 1MB（30 秒≈960KB）；超长音频会导致识别失败",
-        "type": "int",
-        "default": 30
+    "advanced": {
+        "description": "高级设置",
+        "type": "object",
+        "hint": "识别性能与媒体处理参数，一般无需修改",
+        "items": {
+            "identify_timeout": {
+                "description": "识别超时（秒）",
+                "type": "int",
+                "default": 30,
+                "hint": "整个识别链路（所有引擎）的总超时上限"
+            },
+            "audio_max_seconds": {
+                "description": "视频音频截取时长（秒）",
+                "type": "int",
+                "default": 30,
+                "hint": "识曲引擎建议识别 12 秒以内、文件小于 1MB（30 秒 ≈ 960KB）；超长音频会导致识别失败"
+            }
+        }
     }
 }

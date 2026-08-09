@@ -50,6 +50,27 @@ def _load_cjk_font(size: int = 20):
     return ImageFont.load_default()
 
 
+def _cfg(config: dict, *keys, default=None):
+    """从嵌套配置中安全取值。
+
+    Args:
+        config: 插件配置 dict（可能为嵌套结构）。
+        keys: 逐层键路径，如 _cfg(config, "engines", "xfyun", "app_id")。
+        default: 任一环节缺失时的默认值。
+
+    Returns:
+        命中路径上的值；缺失时返回 default。
+    """
+    node = config
+    for key in keys:
+        if not isinstance(node, dict):
+            return default
+        node = node.get(key)
+        if node is None:
+            return default
+    return node
+
+
 @dataclass
 class SongInfo:
     title: str | None = None
@@ -755,41 +776,54 @@ def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:
     """按配置构造引擎链和哼唱引擎。
 
     Args:
-        config: 插件配置 dict。
+        config: 插件配置 dict（嵌套结构：engines.xfyun / engines.acrcloud 等）。
 
     Returns:
         (SongIdentifier, XfyunHummingEngine) 元组。
     """
+    engines_cfg = _cfg(config, "engines", default={}) or {}
     engine_map = {
         "xfyun": XfyunAcrEngine(
-            app_id=config.get("xfyun_app_id", ""),
-            api_key=config.get("xfyun_api_key", ""),
-            api_secret=config.get("xfyun_api_secret", ""),
+            app_id=_cfg(engines_cfg, "xfyun", "app_id", default="") or "",
+            api_key=_cfg(engines_cfg, "xfyun", "api_key", default="") or "",
+            api_secret=_cfg(engines_cfg, "xfyun", "api_secret", default="") or "",
         ),
         "acrcloud": AcrcloudEngine(
-            host=config.get("acrcloud_host", ""),
-            access_key=config.get("acrcloud_access_key", ""),
-            access_secret=config.get("acrcloud_access_secret", ""),
+            host=_cfg(engines_cfg, "acrcloud", "host", default="") or "",
+            access_key=_cfg(engines_cfg, "acrcloud", "access_key", default="")
+            or "",
+            access_secret=_cfg(engines_cfg, "acrcloud", "access_secret", default="")
+            or "",
         ),
     }
-    if config.get("enable_shazam_fallback", True):
+    if _cfg(engines_cfg, "shazam", "enabled", default=True):
         engine_map["shazam"] = ShazamEngine()
 
     engines = []
     added = set()
-    order = str(config.get("engine_order", "xfyun,acrcloud,shazam"))
+    order = str(
+        _cfg(engines_cfg, "order", default="xfyun,acrcloud,shazam") or ""
+    )
     for name in [n.strip() for n in order.split(",")]:
         if name in engine_map and name not in added:
             engines.append(engine_map[name])
             added.add(name)
 
     humming = XfyunHummingEngine(
-        app_id=config.get("xfyun_humming_app_id", "") or config.get("xfyun_app_id", ""),
-        api_key=config.get("xfyun_humming_api_key", "")
-        or config.get("xfyun_api_key", ""),
+        app_id=(
+            _cfg(engines_cfg, "xfyun_humming", "app_id", default="")
+            or _cfg(engines_cfg, "xfyun", "app_id", default="")
+            or ""
+        ),
+        api_key=(
+            _cfg(engines_cfg, "xfyun_humming", "api_key", default="")
+            or _cfg(engines_cfg, "xfyun", "api_key", default="")
+            or ""
+        ),
     )
     return SongIdentifier(
-        engines=engines, timeout=float(config.get("identify_timeout", 30))
+        engines=engines,
+        timeout=float(_cfg(config, "advanced", "identify_timeout", default=30)),
     ), humming
 
 
@@ -912,16 +946,13 @@ class ResultFormatter:
         self.cfg = cfg
 
     def format_text(self, song: SongInfo) -> str:
+        """格式化歌曲文本（歌名/歌手，不含链接——链接由独立消息发送）。"""
         parts = []
-        if self.cfg.get("output_title", True) and song.title:
+        if _cfg(self.cfg, "output", "title", default=True) and song.title:
             parts.append(song.title)
-        if self.cfg.get("output_artist", True) and song.artist:
+        if _cfg(self.cfg, "output", "artist", default=True) and song.artist:
             parts.append(song.artist)
         text = " - ".join(parts)
-        if self.cfg.get("output_link", True):
-            link = self._build_link(song)
-            if link:
-                text += f"\n🔗 {link}"
         return text.strip() or "未能获取歌曲信息"
 
     def _build_link(self, song: SongInfo) -> str | None:
@@ -1085,11 +1116,13 @@ class SongIdentifierPlugin(Star):
         super().__init__(context)
         self.config = config
         self.detector = TriggerDetector(
-            config.get("trigger_keyword", "识曲"),
-            config.get("humming_keyword", "哼唱"),
+            _cfg(config, "trigger", "keyword", default="识曲") or "识曲",
+            _cfg(config, "trigger", "humming_keyword", default="哼唱") or "哼唱",
         )
         self.materializer = MediaMaterializer(
-            max_seconds=int(config.get("audio_max_seconds", 30))
+            max_seconds=int(
+                _cfg(config, "advanced", "audio_max_seconds", default=30)
+            )
         )
         self.identifier, self.humming_engine = build_engines(config)
         self.enricher = SongEnricher()
@@ -1145,7 +1178,9 @@ class SongIdentifierPlugin(Star):
             )
 
             timeout = aiohttp.ClientTimeout(
-                total=float(self.config.get("identify_timeout", 30))
+                total=float(
+                    _cfg(self.config, "advanced", "identify_timeout", default=30)
+                )
             )
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 if mode == "humming":
@@ -1182,14 +1217,14 @@ class SongIdentifierPlugin(Star):
     async def _send_result(self, event: AstrMessageEvent, song: SongInfo):
         """按 output_format 配置发送识别结果：card/image/text。
 
-        试听链接（output_link）为独立开关：text 模式内嵌链接，image/card
-        模式在主内容之后附加发送链接文本。
+        试听链接（output.link）为独立开关：无论何种输出形式，先发歌曲
+        内容，再分开发送试听链接（text/image/card 统一两条消息）。
 
         Args:
             event: 消息事件。
             song: 识别到的歌曲信息。
         """
-        fmt = self.config.get("output_format", "text")
+        fmt = _cfg(self.config, "output", "format", default="text")
         logger.info(f"[识曲] 输出格式: {fmt}")
         if fmt == "card":
             ok = await self._try_send_card(event, song)
@@ -1210,16 +1245,17 @@ class SongIdentifierPlugin(Star):
             logger.warning("[识曲] 图片生成失败，降级为文本")
         text = self.formatter.format_text(song)
         await event.send(event.plain_result(text))
-        logger.info(f"[识曲] 文本结果发送完成: {text[:80]}")
+        logger.info(f"[识曲] 歌曲内容已发送: {text[:80]}")
+        await self._send_link_if_enabled(event, song)
 
     async def _send_link_if_enabled(self, event: AstrMessageEvent, song: SongInfo):
-        """按 output_link 开关附加发送试听链接（image/card 模式用）。
+        """按 output.link 开关分条发送试听链接（所有输出形式生效）。
 
         Args:
             event: 消息事件。
             song: 歌曲信息。
         """
-        if not self.config.get("output_link", True):
+        if not _cfg(self.config, "output", "link", default=True):
             return
         link_text = self.formatter.format_link(song)
         if not link_text:

@@ -2,12 +2,15 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import os
 import tempfile
 import time
 import uuid
 from dataclasses import dataclass
+from email.utils import formatdate
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 
@@ -161,7 +164,9 @@ class MediaMaterializer:
         return out_path
 
 
-def build_acrcloud_signature(access_key: str, access_secret: str, timestamp: str) -> str:
+def build_acrcloud_signature(
+    access_key: str, access_secret: str, timestamp: str
+) -> str:
     """构造 ACRCloud 识别接口签名（官方算法）。"""
     string_to_sign = f"POST\n/v1/identify\n{access_key}\n{timestamp}"
     digest = hmac.new(
@@ -207,13 +212,19 @@ class AcrcloudEngine:
         if not self.is_configured() or not os.path.exists(audio_path):
             return None
         timestamp = str(int(time.time()))
-        signature = build_acrcloud_signature(self.access_key, self.access_secret, timestamp)
+        signature = build_acrcloud_signature(
+            self.access_key, self.access_secret, timestamp
+        )
         with open(audio_path, "rb") as f:
             sample = f.read()
         form = aiohttp.FormData()
         form.add_field("access_key", self.access_key)
-        form.add_field("sample", sample,
-                       filename=Path(audio_path).name, content_type="application/octet-stream")
+        form.add_field(
+            "sample",
+            sample,
+            filename=Path(audio_path).name,
+            content_type="application/octet-stream",
+        )
         form.add_field("sample_bytes", str(os.path.getsize(audio_path)))
         form.add_field("timestamp", timestamp)
         form.add_field("signature", signature)
@@ -245,3 +256,136 @@ class ShazamEngine:
             artist=track.get("subtitle") or None,
             source="shazam",
         )
+
+
+def build_xfyun_authorization(
+    api_key: str, api_secret: str, host: str, path: str, date: str
+) -> str:
+    """构造讯飞 HMAC-SHA256 鉴权 authorization 参数（官方算法）。"""
+    signature_origin = f"host: {host}\ndate: {date}\nPOST {path} HTTP/1.1"
+    signature_sha = hmac.new(
+        api_secret.encode(), signature_origin.encode(), hashlib.sha256
+    ).digest()
+    signature = base64.b64encode(signature_sha).decode()
+    authorization_origin = (
+        f'api_key="{api_key}", algorithm="hmac-sha256", '
+        f'headers="host date request-line", signature="{signature}"'
+    )
+    return base64.b64encode(authorization_origin.encode()).decode()
+
+
+def parse_xfyun_acr_response(payload: dict) -> SongInfo | None:
+    """解析讯飞 ACRCloud 音乐识别响应（内层为 ACRCloud 格式）。"""
+    if payload.get("header", {}).get("code") != 0:
+        return None
+    text_b64 = (payload.get("payload") or {}).get("output_text", {}).get("text", "")
+    if not text_b64:
+        return None
+    try:
+        inner = json.loads(base64.b64decode(text_b64))
+    except Exception:
+        return None
+    info = parse_acrcloud_response(inner)
+    if info is not None:
+        info.source = "xfyun"
+    return info
+
+
+class XfyunAcrEngine:
+    """讯飞 ACRCloud 音乐识别引擎（国内直连，要求 mp3 音频）。"""
+
+    ENDPOINT = "/v1/private/s29ebee0d"
+    DEFAULT_HOST = "cn-east-1.api.xf-yun.com"
+
+    def __init__(self, app_id: str, api_key: str, api_secret: str):
+        self.app_id = app_id
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.host = self.DEFAULT_HOST
+
+    def is_configured(self) -> bool:
+        return bool(self.app_id and self.api_key and self.api_secret)
+
+    async def identify(self, audio_path: str, session) -> SongInfo | None:
+        if not self.is_configured() or not os.path.exists(audio_path):
+            return None
+        mp3_path = await self._to_mp3(audio_path)
+        if not mp3_path:
+            return None
+        try:
+            date = formatdate(usegmt=True)
+            authorization = build_xfyun_authorization(
+                self.api_key, self.api_secret, self.host, self.ENDPOINT, date
+            )
+            url = (
+                f"https://{self.host}{self.ENDPOINT}"
+                f"?authorization={quote(authorization)}"
+                f"&host={self.host}&date={quote(date)}"
+            )
+            if self.host.startswith("http"):
+                url = f"{self.host}{self.ENDPOINT}?authorization={quote(authorization)}&host={self.host}&date={quote(date)}"
+            with open(mp3_path, "rb") as f:
+                audio_b64 = base64.b64encode(f.read()).decode()
+            body = {
+                "header": {"app_id": self.app_id, "status": 3},
+                "parameter": {
+                    "acr_music": {
+                        "mode": "music",
+                        "output_text": {
+                            "encoding": "utf8",
+                            "compress": "raw",
+                            "format": "json",
+                        },
+                    }
+                },
+                "payload": {
+                    "data": {
+                        "encoding": "lame",
+                        "sample_rate": 16000,
+                        "channels": 1,
+                        "bit_depth": 16,
+                        "status": 3,
+                        "audio": audio_b64,
+                        "frame_size": 0,
+                    }
+                },
+            }
+            async with session.post(url, json=body) as resp:
+                payload = await resp.json()
+            return parse_xfyun_acr_response(payload)
+        finally:
+            try:
+                os.remove(mp3_path)
+            except OSError:
+                pass
+
+    async def _to_mp3(self, wav_path: str) -> str | None:
+        """wav → 16k 单声道 mp3（lame），供讯飞接口使用。"""
+        mp3_path = str(
+            Path(tempfile.gettempdir())
+            / f"xfyun_{os.getpid()}_{abs(hash(wav_path))}.mp3"
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i",
+                wav_path,
+                "-codec:a",
+                "libmp3lame",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-b:a",
+                "64k",
+                mp3_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError:
+            return None
+        await proc.wait()
+        if proc.returncode != 0 or not os.path.exists(mp3_path):
+            return None
+        return mp3_path

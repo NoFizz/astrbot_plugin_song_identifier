@@ -28,6 +28,7 @@ def _package(name: str) -> types.ModuleType:
 
 def _install_astrbot_stubs() -> None:
     """安装满足单元测试所需的最小 AstrBot 桩模块。"""
+
     class _Filter:
         def command_group(self, *args, **kwargs):
             class _CommandGroup:
@@ -203,7 +204,9 @@ except Exception:
 @pytest.fixture
 def mock_event():
     class _Event:
-        def __init__(self, messages=None, message_str="", self_id="bot-1", group_id="g1"):
+        def __init__(
+            self, messages=None, message_str="", self_id="bot-1", group_id="g1"
+        ):
             self._messages = messages or []
             self.message_str = message_str
             self._self_id = self_id
@@ -225,6 +228,20 @@ def mock_event():
 
         def is_private_chat(self):
             return not self._group_id
+
+        @property
+        def message_str(self):
+            if self._message_str:
+                return self._message_str
+            parts = []
+            for comp in self._messages:
+                if type(comp).__name__ == "Plain":
+                    parts.append(getattr(comp, "text", "") or "")
+            return "".join(parts)
+
+        @message_str.setter
+        def message_str(self, value):
+            self._message_str = value
 
         def plain_result(self, text):
             return {"type": "plain", "text": text}

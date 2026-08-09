@@ -49,5 +49,40 @@
         "description": "识别超时（秒）",
         "type": "int",
         "default": 30
+    },
+    "humming_keyword": {
+        "description": "哼唱识别触发关键词（引用语音消息 + @bot + 该词，走讯飞哼唱识别）",
+        "type": "string",
+        "default": "哼唱"
+    },
+    "engine_order": {
+        "description": "音乐识别引擎顺序，逗号分隔：xfyun,acrcloud,shazam",
+        "type": "string",
+        "default": "xfyun,acrcloud,shazam"
+    },
+    "xfyun_app_id": {
+        "description": "讯飞开放平台应用 AppID（歌曲识别 ACRCloud 音乐识别）",
+        "type": "string",
+        "default": ""
+    },
+    "xfyun_api_key": {
+        "description": "讯飞 APIKey（歌曲识别 ACRCloud 音乐识别）",
+        "type": "string",
+        "default": ""
+    },
+    "xfyun_api_secret": {
+        "description": "讯飞 APISecret（歌曲识别 ACRCloud 音乐识别）",
+        "type": "string",
+        "default": ""
+    },
+    "xfyun_humming_app_id": {
+        "description": "讯飞 AppID（歌曲识别 qbh 哼唱识别，可与上面相同）",
+        "type": "string",
+        "default": ""
+    },
+    "xfyun_humming_api_key": {
+        "description": "讯飞 APIKey（歌曲识别 qbh 哼唱识别）",
+        "type": "string",
+        "default": ""
     }
 }

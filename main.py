@@ -21,6 +21,31 @@ from astrbot.api.message_components import At, File, Record, Reply, Video
 from astrbot.api.star import Context, Star, register
 
 
+def _load_cjk_font(size: int = 20):
+    """加载系统中文字体，失败时回退 Pillow 默认字体。
+
+    Args:
+        size: 字体大小。
+
+    Returns:
+        ImageFont.FreeTypeFont 或默认字体。
+    """
+    candidates = [
+        "C:/Windows/Fonts/msyh.ttc",  # 微软雅黑
+        "C:/Windows/Fonts/simhei.ttf",  # 黑体
+        "C:/Windows/Fonts/simsun.ttc",  # 宋体
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Linux
+        "/System/Library/Fonts/PingFang.ttc",  # macOS
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
 @register(
     "astrbot_plugin_song_identifier", "NoFizz", "引用语音/视频消息识曲插件", "1.0.0"
 )
@@ -688,7 +713,7 @@ class ResultFormatter:
                 )
                 canvas.paste(overlay, (self.THUMB_SIZE, 0))
             draw = ImageDraw.Draw(canvas)
-            font = ImageFont.load_default()
+            font = _load_cjk_font()
             title = song.title or "未知歌曲"
             draw.text((self.THUMB_SIZE + 20, 40), title, fill="#ffffff", font=font)
             if song.artist:
@@ -702,8 +727,6 @@ class ResultFormatter:
             return None
 
     async def _load_cover(self, url: str):
-        import aiohttp
-
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 url, timeout=aiohttp.ClientTimeout(total=10)

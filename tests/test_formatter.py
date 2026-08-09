@@ -1,7 +1,7 @@
 import io
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageFont
 
 from astrbot_plugin_song_identifier.main import ResultFormatter, SongInfo
 
@@ -69,6 +69,41 @@ def test_text_link_xfyun_source_falls_back_qq_page():
     song = SongInfo(title="晴天", artist="周杰伦", song_id="001", source="xfyun")
     text = fmt.format_text(song)
     assert "https://y.qq.com/n/ryqq/songDetail/001" in text
+
+
+def test_text_link_netease_source_uses_music163_page():
+    fmt = ResultFormatter({
+        "output_title": False, "output_artist": False, "output_link": True,
+        "output_format": "text",
+    })
+    song = SongInfo(title="晴天", artist="周杰伦", song_id="001", source="netease")
+    text = fmt.format_text(song)
+    assert "https://music.163.com/song/001" in text
+
+
+def test_text_empty_song_falls_back():
+    fmt = ResultFormatter({
+        "output_title": False, "output_artist": False, "output_link": False,
+        "output_format": "text",
+    })
+    assert fmt.format_text(SongInfo()) == "未能获取歌曲信息"
+
+
+def test_cjk_font_loader():
+    import os
+
+    from astrbot_plugin_song_identifier.main import _load_cjk_font
+
+    candidates = [
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/simsun.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ]
+    if not any(os.path.exists(p) for p in candidates):
+        pytest.skip("no system CJK font available")
+    assert isinstance(_load_cjk_font(), ImageFont.FreeTypeFont)
 
 
 @pytest.mark.asyncio

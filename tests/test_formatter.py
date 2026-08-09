@@ -1,0 +1,107 @@
+import io
+
+import pytest
+from PIL import Image
+
+from astrbot_plugin_song_identifier.main import ResultFormatter, SongInfo
+
+
+def test_text_with_all_switches():
+    fmt = ResultFormatter(
+        {
+            "output_title": True,
+            "output_artist": True,
+            "output_link": True,
+            "output_format": "text",
+        }
+    )
+    song = SongInfo(
+        title="晴天",
+        artist="周杰伦",
+        audio_url="http://audio/1.mp3",
+        song_id="001",
+        source="qq",
+    )
+    text = fmt.format_text(song)
+    assert "晴天" in text and "周杰伦" in text
+    assert "http://audio/1.mp3" in text
+
+
+def test_text_title_only():
+    fmt = ResultFormatter(
+        {
+            "output_title": True,
+            "output_artist": False,
+            "output_link": False,
+            "output_format": "text",
+        }
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", audio_url="http://a.mp3")
+    text = fmt.format_text(song)
+    assert "晴天" in text
+    assert "周杰伦" not in text
+    assert "http://" not in text
+
+
+def test_text_link_fallback_to_qq_page():
+    fmt = ResultFormatter(
+        {
+            "output_title": False,
+            "output_artist": False,
+            "output_link": True,
+            "output_format": "text",
+        }
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", song_id="001", source="qq")
+    text = fmt.format_text(song)
+    assert "https://y.qq.com/n/ryqq/songDetail/001" in text
+
+
+def test_text_link_xfyun_source_falls_back_qq_page():
+    fmt = ResultFormatter(
+        {
+            "output_title": False,
+            "output_artist": False,
+            "output_link": True,
+            "output_format": "text",
+        }
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", song_id="001", source="xfyun")
+    text = fmt.format_text(song)
+    assert "https://y.qq.com/n/ryqq/songDetail/001" in text
+
+
+@pytest.mark.asyncio
+async def test_build_image_returns_jpeg_bytes():
+    fmt = ResultFormatter(
+        {
+            "output_title": True,
+            "output_artist": True,
+            "output_link": True,
+            "output_format": "image",
+        }
+    )
+    song = SongInfo(title="晴天", artist="周杰伦")
+    data = await fmt.build_image(song)
+    assert data is not None
+    img = Image.open(io.BytesIO(data))
+    assert img.format == "JPEG"
+    assert img.width > 100
+
+
+def test_build_card_payload():
+    fmt = ResultFormatter({})
+    song = SongInfo(
+        title="晴天",
+        artist="周杰伦",
+        audio_url="http://audio/1.mp3",
+        cover_url="http://cover/1.jpg",
+    )
+    payload = fmt.build_card_payload(song, "123456")
+    message = payload["message"][0]
+    assert message["type"] == "music"
+    assert message["data"]["type"] == "custom"
+    assert message["data"]["title"] == "晴天"
+    assert message["data"]["singer"] == "周杰伦"
+    assert message["data"]["audio"] == "http://audio/1.mp3"
+    assert message["data"]["image"] == "http://cover/1.jpg"

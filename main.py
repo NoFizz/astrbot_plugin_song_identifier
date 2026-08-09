@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import tempfile
@@ -14,6 +15,7 @@ from urllib.parse import quote
 
 import aiohttp
 import httpx
+from PIL import Image, ImageDraw, ImageFont
 
 from astrbot.api.message_components import At, File, Record, Reply, Video
 from astrbot.api.star import Context, Star, register
@@ -635,3 +637,97 @@ class SongEnricher:
             song_id=str(first.get("songid") or "") or song.song_id,
             source=song.source,
         )
+
+
+class ResultFormatter:
+    """将识别结果格式化为文本/图片/音乐卡片。"""
+
+    CARD_WIDTH = 500
+    CARD_HEIGHT = 240
+    THUMB_SIZE = 240
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+
+    def format_text(self, song: SongInfo) -> str:
+        parts = []
+        if self.cfg.get("output_title", True) and song.title:
+            parts.append(song.title)
+        if self.cfg.get("output_artist", True) and song.artist:
+            parts.append(song.artist)
+        text = " - ".join(parts)
+        if self.cfg.get("output_link", True):
+            link = self._build_link(song)
+            if link:
+                text += f"\n🔗 {link}"
+        return text.strip() or "未能获取歌曲信息"
+
+    def _build_link(self, song: SongInfo) -> str | None:
+        if song.audio_url:
+            return song.audio_url
+        if song.song_id:
+            if song.source == "netease":
+                return f"https://music.163.com/song/{song.song_id}"
+            return f"https://y.qq.com/n/ryqq/songDetail/{song.song_id}"
+        return None
+
+    async def build_image(self, song: SongInfo) -> bytes | None:
+        """绘制音乐卡片图（封面 + 渐变遮罩 + 歌名 + 歌手）。"""
+        try:
+            canvas = Image.new("RGB", (self.CARD_WIDTH, self.CARD_HEIGHT), "#1a1a2e")
+            cover = None
+            if song.cover_url:
+                cover = await self._load_cover(song.cover_url)
+            if cover is not None:
+                cover = cover.resize((self.THUMB_SIZE, self.THUMB_SIZE))
+                canvas.paste(cover, (0, 0))
+                overlay = Image.new(
+                    "RGB",
+                    (self.CARD_WIDTH - self.THUMB_SIZE, self.THUMB_SIZE),
+                    "#2d2d44",
+                )
+                canvas.paste(overlay, (self.THUMB_SIZE, 0))
+            draw = ImageDraw.Draw(canvas)
+            font = ImageFont.load_default()
+            title = song.title or "未知歌曲"
+            draw.text((self.THUMB_SIZE + 20, 40), title, fill="#ffffff", font=font)
+            if song.artist:
+                draw.text(
+                    (self.THUMB_SIZE + 20, 100), song.artist, fill="#bbbbbb", font=font
+                )
+            buffer = io.BytesIO()
+            canvas.save(buffer, format="JPEG", quality=85)
+            return buffer.getvalue()
+        except Exception:
+            return None
+
+    async def _load_cover(self, url: str):
+        import aiohttp
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.read()
+        return Image.open(io.BytesIO(data)).convert("RGB")
+
+    def build_card_payload(self, song: SongInfo, group_id: str) -> dict:
+        """构造 CQ:music custom 卡片发送 payload。"""
+        return {
+            "group_id": group_id,
+            "message": [
+                {
+                    "type": "music",
+                    "data": {
+                        "type": "custom",
+                        "url": song.audio_url or "",
+                        "audio": song.audio_url or "",
+                        "title": song.title or "",
+                        "image": song.cover_url or "",
+                        "singer": song.artist or "",
+                    },
+                }
+            ],
+        }

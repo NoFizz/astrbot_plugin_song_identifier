@@ -1,5 +1,5 @@
 name: astrbot_plugin_song_identifier
-display_name: 识曲
+display_name: 听歌识曲
 desc: 引用语音/视频消息识曲插件（讯飞/ACRCloud/Shazam 多引擎，支持哼唱识别）
 version: v1.0.0
 author: NoFizz

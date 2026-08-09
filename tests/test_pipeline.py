@@ -102,6 +102,11 @@ def make_plugin(identifier_result=None):
             "artist": True,
             "link": True,
             "format": "text",
+            "card_platforms": {
+                "primary": "网易云音乐",
+                "secondary": "QQ音乐",
+                "fallback": "留空",
+            },
         },
         "advanced": {
             "identify_timeout": 60,
@@ -224,9 +229,10 @@ async def test_pipeline_image_mode(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pipeline_card_mode_group_success(monkeypatch):
+    """card 模式：首选平台网易云（有 song_id → 163 卡片，无网络请求）发送成功。"""
     plugin = make_plugin(
         identifier_result=SongInfo(
-            title="晴天", artist="周杰伦", audio_url="http://a.mp3", source="acrcloud"
+            title="晴天", artist="周杰伦", song_id="487527980", source="netease"
         )
     )
     plugin.config["output"]["format"] = "card"
@@ -254,7 +260,7 @@ async def test_pipeline_card_mode_group_success(monkeypatch):
     action, payload = bot.api.calls[0]
     assert action == "send_group_msg"
     assert payload["group_id"] == "g1"
-    assert payload["message"][0]["data"]["title"] == "晴天"
+    assert payload["message"][0]["data"] == {"type": "163", "id": "487527980"}
     # output_link 独立开关：卡片发送后附加试听链接
     assert len(ev.sent) == 1
     assert "🔗" in ev.sent[0]["text"]
@@ -262,10 +268,22 @@ async def test_pipeline_card_mode_group_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pipeline_card_failure_falls_back_to_text(monkeypatch):
+    """card 模式：全部平台发送失败时降级为文本。
+
+    仅配置首选平台（网易云 163 卡片，无网络请求），发送失败且无后续
+    平台可试 → 降级文本。
+    """
     plugin = make_plugin(
-        identifier_result=SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
+        identifier_result=SongInfo(
+            title="晴天", artist="周杰伦", song_id="487527980", source="netease"
+        )
     )
     plugin.config["output"]["format"] = "card"
+    plugin.config["output"]["card_platforms"] = {
+        "primary": "网易云音乐",
+        "secondary": "留空",
+        "fallback": "留空",
+    }
 
     bot = FakeBot(should_raise=True)
     record = Record(file="x.amr")
@@ -286,8 +304,10 @@ async def test_pipeline_card_failure_falls_back_to_text(monkeypatch):
     monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
 
     await plugin.on_message(ev)
-    assert len(ev.sent) == 1
+    # 卡片降级文本 + 分条试听链接（output.link 默认开启）
+    assert len(ev.sent) == 2
     assert "晴天" in ev.sent[0]["text"]
+    assert "🔗" in ev.sent[1]["text"]
     assert ev.stopped is True
 
 
@@ -309,6 +329,7 @@ async def test_pipeline_materialize_failed_hint(monkeypatch):
     )
 
     await plugin.on_message(ev)
+    # 媒体落地失败：只有提示一条，无歌曲内容与链接
     assert len(ev.sent) == 1
     assert "媒体文件获取失败" in ev.sent[0]["text"]
     assert ev.stopped is True

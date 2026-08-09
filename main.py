@@ -825,6 +825,52 @@ def build_engines(config: dict) -> SongIdentifier:
     )
 
 
+NETEASE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0 Safari/537.36"
+    ),
+    "Referer": "https://music.163.com",
+    "Cookie": "appver=2.0.2",
+}
+
+
+async def _netease_search(client, query: str) -> dict | None:
+    """网易云搜索首个歌曲条目。
+
+    Args:
+        client: httpx.AsyncClient 实例。
+        query: 搜索关键词（歌名+歌手）。
+
+    Returns:
+        首个歌曲 dict；无结果或请求失败时返回 None。
+    """
+    resp = await client.get(
+        "https://music.163.com/api/search/get/web",
+        params={"s": query, "type": 1, "limit": 1},
+        headers=NETEASE_HEADERS,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    songs = ((payload.get("result") or {}).get("songs")) or []
+    return songs[0] if songs else None
+
+
+def _netease_outer_url(song: SongInfo) -> str | None:
+    """网易云官方外链试听地址（custom 卡片 audio 兜底）。
+
+    Args:
+        song: 歌曲信息（需含网易云 song_id）。
+
+    Returns:
+        外链试听 URL；无 song_id 时返回 None。
+    """
+    if song.song_id:
+        return f"https://music.163.com/song/media/outer/url?id={song.song_id}.mp3"
+    return None
+
+
 class SongEnricher:
     """用歌名+歌手在网易云音乐搜索，补全歌曲 ID/封面/试听链接。
 
@@ -836,15 +882,7 @@ class SongEnricher:
     SEARCH_URL = "https://music.163.com/api/search/get/web"
     DETAIL_URL = "https://music.163.com/api/song/detail/"
 
-    HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0 Safari/537.36"
-        ),
-        "Referer": "https://music.163.com",
-        "Cookie": "appver=2.0.2",
-    }
+    HEADERS = NETEASE_HEADERS
 
     async def enrich(self, song: SongInfo) -> SongInfo:
         """用网易云搜索补全歌曲信息；失败或未命中返回原对象（不修改入参）。
@@ -933,6 +971,219 @@ class SongEnricher:
             return None
 
 
+class NeteaseCardProvider:
+    """网易云音乐卡片：163 卡片（仅需歌曲 ID，客户端原生渲染播放）。"""
+
+    async def build_music_segment(self, song: SongInfo) -> dict | None:
+        """构造 CQ:music 163 段；无歌曲 ID 且搜索失败时返回 None。
+
+        Args:
+            song: 歌曲信息。
+
+        Returns:
+            CQ:music 段 dict；失败时返回 None。
+        """
+        song_id = song.song_id
+        if not song_id:
+            query = f"{song.title or ''} {song.artist or ''}".strip()
+            if not query:
+                return None
+            try:
+                async with httpx.AsyncClient() as client:
+                    first = await _netease_search(client, query)
+                song_id = str((first or {}).get("id") or "")
+            except Exception as e:
+                logger.warning(f"[识曲] 网易云卡片搜索失败: {e}")
+                return None
+        if not song_id:
+            return None
+        return {"type": "music", "data": {"type": "163", "id": song_id}}
+
+
+class QQMusicCardProvider:
+    """QQ 音乐卡片：原生 qq 卡片（songmid，客户端渲染）。"""
+
+    SEARCH_URL = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+
+    async def build_music_segment(self, song: SongInfo) -> dict | None:
+        """按歌名+歌手搜索 QQ 音乐，构造原生 qq 卡片段。
+
+        Args:
+            song: 歌曲信息。
+
+        Returns:
+            CQ:music 段 dict；失败时返回 None。
+        """
+        query = f"{song.title or ''} {song.artist or ''}".strip()
+        if not query:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.SEARCH_URL,
+                    params={"w": query, "format": "json", "n": 1, "p": 1},
+                    headers={
+                        "User-Agent": NETEASE_HEADERS["User-Agent"],
+                        "Referer": "https://y.qq.com/",
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                songs = (
+                    ((payload.get("data") or {}).get("song") or {}).get("list") or []
+                )
+                if not songs:
+                    return None
+                songmid = songs[0].get("songmid")
+                if not songmid:
+                    return None
+                return {"type": "music", "data": {"type": "qq", "id": songmid}}
+        except Exception as e:
+            logger.warning(f"[识曲] QQ音乐卡片搜索失败: {e}")
+            return None
+
+
+class KugouCardProvider:
+    """酷狗音乐卡片：custom 卡片（歌曲页链接 + 封面，试听用网易云外链兜底）。"""
+
+    SEARCH_URL = "https://msearch.kugou.com/api/v3/search/song"
+
+    async def build_music_segment(self, song: SongInfo) -> dict | None:
+        """搜索酷狗并构造 custom 卡片段。
+
+        Args:
+            song: 歌曲信息。
+
+        Returns:
+            CQ:music 段 dict；失败时返回 None。
+        """
+        query = f"{song.title or ''} {song.artist or ''}".strip()
+        if not query:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.SEARCH_URL,
+                    params={
+                        "format": "json",
+                        "keyword": query,
+                        "page": 1,
+                        "pagesize": 1,
+                    },
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 "
+                            "like Mac OS X)"
+                        ),
+                        "Referer": "https://m.kugou.com/",
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                info = ((payload.get("data") or {}).get("info")) or []
+                if not info:
+                    return None
+                first = info[0]
+                song_hash = first.get("hash")
+                if not song_hash:
+                    return None
+                cover = (first.get("trans_param") or {}).get("union_cover") or ""
+                cover = cover.replace("{size}", "400") if cover else ""
+                return {
+                    "type": "music",
+                    "data": {
+                        "type": "custom",
+                        "url": f"https://www.kugou.com/song/#hash={song_hash}",
+                        "audio": _netease_outer_url(song) or "",
+                        "title": first.get("songname") or song.title or "",
+                        "image": cover,
+                        "singer": first.get("singername") or song.artist or "",
+                    },
+                }
+        except Exception as e:
+            logger.warning(f"[识曲] 酷狗卡片搜索失败: {e}")
+            return None
+
+
+class KuwoCardProvider:
+    """酷我音乐卡片：custom 卡片（歌曲页链接 + 封面，试听用网易云外链兜底）。"""
+
+    SEARCH_URL = "https://search.kuwo.cn/r.s"
+
+    async def build_music_segment(self, song: SongInfo) -> dict | None:
+        """搜索酷我并构造 custom 卡片段。
+
+        Args:
+            song: 歌曲信息。
+
+        Returns:
+            CQ:music 段 dict；失败时返回 None。
+        """
+        query = f"{song.title or ''} {song.artist or ''}".strip()
+        if not query:
+            return None
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    self.SEARCH_URL,
+                    params={
+                        "client": "kt",
+                        "all": query,
+                        "pn": 0,
+                        "rn": 1,
+                        "type": "kid",
+                        "uid": "794762570",
+                        "ver": "kwplayer_ar_9.2.2.1",
+                        "vipver": "1",
+                        "show_copyright_off": "1",
+                        "newver": "1",
+                        "ft": "music",
+                        "cluster": "0",
+                        "strategy": "2012",
+                        "encoding": "utf8",
+                        "rformat": "json",
+                    },
+                    headers={
+                        "User-Agent": NETEASE_HEADERS["User-Agent"],
+                        "Referer": "http://www.kuwo.cn/",
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                items = payload.get("abslist") or []
+                if not items:
+                    return None
+                first = items[0]
+                rid = str(first.get("MUSICRID") or "").replace("MUSIC_", "")
+                if not rid:
+                    return None
+                pic = first.get("web_albumpic_short") or ""
+                cover = f"https://img1.kuwo.cn/star/albumcover/{pic}" if pic else ""
+                return {
+                    "type": "music",
+                    "data": {
+                        "type": "custom",
+                        "url": f"https://www.kuwo.cn/play_detail/{rid}",
+                        "audio": _netease_outer_url(song) or "",
+                        "title": first.get("NAME") or song.title or "",
+                        "image": cover,
+                        "singer": first.get("ARTIST") or song.artist or "",
+                    },
+                }
+        except Exception as e:
+            logger.warning(f"[识曲] 酷我卡片搜索失败: {e}")
+            return None
+
+
+# 配置下拉选项（中文标签）→ 音乐卡片平台 provider
+PLATFORM_PROVIDERS = {
+    "网易云音乐": NeteaseCardProvider(),
+    "QQ音乐": QQMusicCardProvider(),
+    "酷狗音乐": KugouCardProvider(),
+    "酷我音乐": KuwoCardProvider(),
+}
+
+
 class ResultFormatter:
     """将识别结果格式化为文本/图片/音乐卡片。"""
 
@@ -1013,86 +1264,6 @@ class ResultFormatter:
         """
         link = self._build_link(song)
         return f"🔗 {link}" if link else None
-
-    def build_card_payload(
-        self, song: SongInfo, target_id: str, is_private: bool = False
-    ) -> dict:
-        """构造 CQ:music 卡片发送 payload。
-
-        优先使用网易云 163 卡片（仅需歌曲 ID，无需音频直链）；无歌曲 ID
-        时退回 custom 卡片（需 audio_url）。
-
-        Args:
-            song: 识别到的歌曲信息。
-            target_id: 群号（群聊）或用户号（私聊）。
-            is_private: 是否为私聊（使用 user_id 键）。
-
-        Returns:
-            可直接传给 call_action 的 payload dict。
-        """
-        key = "user_id" if is_private else "group_id"
-        if song.song_id:
-            return {
-                key: target_id,
-                "message": [
-                    {"type": "music", "data": {"type": "163", "id": song.song_id}}
-                ],
-            }
-        return {
-            key: target_id,
-            "message": [
-                {
-                    "type": "music",
-                    "data": {
-                        "type": "custom",
-                        "url": song.audio_url or "",
-                        "audio": song.audio_url or "",
-                        "title": song.title or "",
-                        "image": song.cover_url or "",
-                        "singer": song.artist or "",
-                    },
-                }
-            ],
-        }
-
-    def build_custom_card_payload(
-        self, song: SongInfo, target_id: str, is_private: bool = False
-    ) -> dict:
-        """构造 CQ:music custom 卡片 payload（163 卡片失败时的兜底）。
-
-        有网易云歌曲 ID 时使用官方外链试听
-        （music.163.com/song/media/outer/url?id={id}.mp3）作为音频地址。
-
-        Args:
-            song: 识别到的歌曲信息。
-            target_id: 群号（群聊）或用户号（私聊）。
-            is_private: 是否为私聊（使用 user_id 键）。
-
-        Returns:
-            可直接传给 call_action 的 payload dict。
-        """
-        key = "user_id" if is_private else "group_id"
-        audio = song.audio_url or (
-            f"https://music.163.com/song/media/outer/url?id={song.song_id}.mp3"
-            if song.song_id
-            else ""
-        )
-        return {
-            key: target_id,
-            "message": [
-                {
-                    "type": "music",
-                    "data": {
-                        "type": "custom",
-                        "url": audio,
-                        "audio": audio,
-                        "title": song.title or "",
-                        "image": song.cover_url or "",
-                        "singer": song.artist or "",
-                    },
-                }
-            ],
-        }
 
 
 @register(
@@ -1253,10 +1424,10 @@ class SongIdentifierPlugin(Star):
         logger.info(f"[识曲] 试听链接已发送: {link_text}")
 
     async def _try_send_card(self, event: AstrMessageEvent, song: SongInfo) -> bool:
-        """尝试发送 QQ 音乐卡片；不支持时返回 False 降级。
+        """按配置的音乐卡片平台三档顺序尝试发送卡片。
 
-        两级策略：先发网易云 163 卡片（仅需歌曲 ID）；失败或缺失 ID 时
-        改用 custom 卡片（网易云外链试听兜底）。
+        平台顺序来自配置 output.card_platforms（首选→次选→备选）；
+        「留空」或无法构建/发送的平台自动跳过，全部失败返回 False 降级。
 
         Args:
             event: 消息事件。
@@ -1274,29 +1445,29 @@ class SongIdentifierPlugin(Star):
         target = (
             event.get_sender_id() if event.is_private_chat() else event.get_group_id()
         )
-        try:
-            # 一级：网易云 163 卡片
-            if song.song_id:
-                try:
-                    await bot.api.call_action(
-                        action,
-                        **self.formatter.build_card_payload(
-                            song, target, is_private=event.is_private_chat()
-                        ),
-                    )
-                    return True
-                except Exception as e:
-                    logger.warning(f"[识曲] 163 卡片发送失败，尝试 custom: {e}")
-            # 二级：custom 卡片（网易云外链试听兜底）
-            payload = self.formatter.build_custom_card_payload(
-                song, target, is_private=event.is_private_chat()
+        target_key = "user_id" if event.is_private_chat() else "group_id"
+        for slot in ("primary", "secondary", "fallback"):
+            label = (
+                _cfg(self.config, "output", "card_platforms", slot, default="") or ""
             )
-            audio = payload["message"][0]["data"]["audio"]
-            if not audio:
-                logger.warning("[识曲] custom 卡片无音频地址，放弃卡片")
-                return False
-            await bot.api.call_action(action, **payload)
-            return True
-        except Exception as e:
-            logger.warning(f"card send failed: {e}")
-            return False
+            if label == "留空" or label not in PLATFORM_PROVIDERS:
+                logger.info(f"[识曲] 卡片平台 {slot}（{label or '留空'}）跳过")
+                continue
+            provider = PLATFORM_PROVIDERS[label]
+            try:
+                segment = await provider.build_music_segment(song)
+            except Exception as e:
+                logger.warning(f"[识曲] {label} 卡片构建异常: {e}")
+                segment = None
+            if not segment:
+                logger.warning(f"[识曲] {label} 无法构建卡片，尝试下一档")
+                continue
+            try:
+                await bot.api.call_action(
+                    action, **{target_key: target, "message": [segment]}
+                )
+                logger.info(f"[识曲] {label} 卡片发送成功")
+                return True
+            except Exception as e:
+                logger.warning(f"[识曲] {label} 卡片发送失败: {e}，尝试下一档")
+        return False

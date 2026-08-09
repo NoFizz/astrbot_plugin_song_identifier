@@ -84,6 +84,24 @@ def test_text_template_respects_switches():
     assert fmt.format_text(song) == "周杰伦"
 
 
+def test_text_template_preserves_crlf_newlines():
+    """Windows 编辑器保存的 \\r\\n 换行原样保留，不被折叠成空格。"""
+    fmt = ResultFormatter(
+        make_cfg(text_template="歌名：{title}\r\n歌手：{artist}")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
+    assert fmt.format_text(song) == "歌名：晴天\r\n歌手：周杰伦"
+
+
+def test_text_template_middle_placeholder_cleanup():
+    """中间的 {album} 为空时，残留的 " - " 分隔符被清理且不破坏其他内容。"""
+    fmt = ResultFormatter(
+        make_cfg(text_template="{title} - {album} - {artist}")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", source="shazam")  # 无专辑
+    assert fmt.format_text(song) == "晴天 - 周杰伦"
+
+
 def test_format_link_none_without_id():
     fmt = ResultFormatter(make_cfg())
     assert fmt.format_link(SongInfo(title="晴天")) is None

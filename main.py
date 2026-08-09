@@ -5,6 +5,7 @@ import hmac
 import io
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -1220,11 +1221,9 @@ class ResultFormatter:
         text = template
         for key, value in values.items():
             text = text.replace("{" + key + "}", value)
-        # 折叠占位符为空后残留的连续空白与分隔符（如 "A - {album} - B" 中 album 为空）
-        import re
-
-        text = re.sub(r"\s*-\s*(?=-)", "", text)
-        text = re.sub(r"\s{2,}", " ", text)
+        # 占位符为空后残留分隔符的清理：仅处理空格/制表符，绝不触碰换行（\r\n 原样保留）
+        text = re.sub(r"[ \t]{2,}", " ", text)      # 合并连续空格
+        text = re.sub(r"(?: ?- ){2,}", " - ", text)  # 合并连续 " - " 段（如 {album} 为空）
         return text.strip(" -") or "未能获取歌曲信息"
 
     def _build_link(self, song: SongInfo) -> str | None:

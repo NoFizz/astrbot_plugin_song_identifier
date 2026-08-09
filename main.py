@@ -973,10 +973,25 @@ class ResultFormatter:
                 data = await resp.read()
         return Image.open(io.BytesIO(data)).convert("RGB")
 
+    def format_link(self, song: SongInfo) -> str | None:
+        """生成带图标的试听链接文本；无可用链接时返回 None。
+
+        Args:
+            song: 歌曲信息。
+
+        Returns:
+            "🔗 <url>" 形式的文本；无链接时返回 None。
+        """
+        link = self._build_link(song)
+        return f"🔗 {link}" if link else None
+
     def build_card_payload(
         self, song: SongInfo, target_id: str, is_private: bool = False
     ) -> dict:
-        """构造 CQ:music custom 卡片发送 payload。
+        """构造 CQ:music 卡片发送 payload。
+
+        优先使用网易云 163 卡片（仅需歌曲 ID，无需音频直链）；无歌曲 ID
+        时退回 custom 卡片（需 audio_url）。
 
         Args:
             song: 识别到的歌曲信息。
@@ -987,6 +1002,13 @@ class ResultFormatter:
             可直接传给 call_action 的 payload dict。
         """
         key = "user_id" if is_private else "group_id"
+        if song.song_id:
+            return {
+                key: target_id,
+                "message": [
+                    {"type": "music", "data": {"type": "163", "id": song.song_id}}
+                ],
+            }
         return {
             key: target_id,
             "message": [
@@ -996,6 +1018,45 @@ class ResultFormatter:
                         "type": "custom",
                         "url": song.audio_url or "",
                         "audio": song.audio_url or "",
+                        "title": song.title or "",
+                        "image": song.cover_url or "",
+                        "singer": song.artist or "",
+                    },
+                }
+            ],
+        }
+
+    def build_custom_card_payload(
+        self, song: SongInfo, target_id: str, is_private: bool = False
+    ) -> dict:
+        """构造 CQ:music custom 卡片 payload（163 卡片失败时的兜底）。
+
+        有网易云歌曲 ID 时使用官方外链试听
+        （music.163.com/song/media/outer/url?id={id}.mp3）作为音频地址。
+
+        Args:
+            song: 识别到的歌曲信息。
+            target_id: 群号（群聊）或用户号（私聊）。
+            is_private: 是否为私聊（使用 user_id 键）。
+
+        Returns:
+            可直接传给 call_action 的 payload dict。
+        """
+        key = "user_id" if is_private else "group_id"
+        audio = song.audio_url or (
+            f"https://music.163.com/song/media/outer/url?id={song.song_id}.mp3"
+            if song.song_id
+            else ""
+        )
+        return {
+            key: target_id,
+            "message": [
+                {
+                    "type": "music",
+                    "data": {
+                        "type": "custom",
+                        "url": audio,
+                        "audio": audio,
                         "title": song.title or "",
                         "image": song.cover_url or "",
                         "singer": song.artist or "",
@@ -1121,6 +1182,9 @@ class SongIdentifierPlugin(Star):
     async def _send_result(self, event: AstrMessageEvent, song: SongInfo):
         """按 output_format 配置发送识别结果：card/image/text。
 
+        试听链接（output_link）为独立开关：text 模式内嵌链接，image/card
+        模式在主内容之后附加发送链接文本。
+
         Args:
             event: 消息事件。
             song: 识别到的歌曲信息。
@@ -1131,6 +1195,7 @@ class SongIdentifierPlugin(Star):
             ok = await self._try_send_card(event, song)
             if ok:
                 logger.info("[识曲] QQ 音乐卡片发送成功")
+                await self._send_link_if_enabled(event, song)
                 return
             logger.warning("[识曲] 卡片发送失败/不支持，降级为文本")
         if fmt == "image":
@@ -1140,14 +1205,33 @@ class SongIdentifierPlugin(Star):
                     event.chain_result([Comp.Image.fromBytes(image_bytes)])
                 )
                 logger.info(f"[识曲] 图片卡片发送完成 ({len(image_bytes)} bytes)")
+                await self._send_link_if_enabled(event, song)
                 return
             logger.warning("[识曲] 图片生成失败，降级为文本")
         text = self.formatter.format_text(song)
         await event.send(event.plain_result(text))
         logger.info(f"[识曲] 文本结果发送完成: {text[:80]}")
 
+    async def _send_link_if_enabled(self, event: AstrMessageEvent, song: SongInfo):
+        """按 output_link 开关附加发送试听链接（image/card 模式用）。
+
+        Args:
+            event: 消息事件。
+            song: 歌曲信息。
+        """
+        if not self.config.get("output_link", True):
+            return
+        link_text = self.formatter.format_link(song)
+        if not link_text:
+            return
+        await event.send(event.plain_result(link_text))
+        logger.info(f"[识曲] 试听链接已发送: {link_text}")
+
     async def _try_send_card(self, event: AstrMessageEvent, song: SongInfo) -> bool:
         """尝试发送 QQ 音乐卡片；不支持时返回 False 降级。
+
+        两级策略：先发网易云 163 卡片（仅需歌曲 ID）；失败或缺失 ID 时
+        改用 custom 卡片（网易云外链试听兜底）。
 
         Args:
             event: 消息事件。
@@ -1159,19 +1243,34 @@ class SongIdentifierPlugin(Star):
         bot = getattr(event, "bot", None)
         if bot is None:
             return False
+        action = (
+            "send_private_msg" if event.is_private_chat() else "send_group_msg"
+        )
+        target = (
+            event.get_sender_id() if event.is_private_chat() else event.get_group_id()
+        )
         try:
-            if event.is_private_chat():
-                await bot.api.call_action(
-                    "send_private_msg",
-                    **self.formatter.build_card_payload(
-                        song, event.get_sender_id(), is_private=True
-                    ),
-                )
-            else:
-                await bot.api.call_action(
-                    "send_group_msg",
-                    **self.formatter.build_card_payload(song, event.get_group_id()),
-                )
+            # 一级：网易云 163 卡片
+            if song.song_id:
+                try:
+                    await bot.api.call_action(
+                        action,
+                        **self.formatter.build_card_payload(
+                            song, target, is_private=event.is_private_chat()
+                        ),
+                    )
+                    return True
+                except Exception as e:
+                    logger.warning(f"[识曲] 163 卡片发送失败，尝试 custom: {e}")
+            # 二级：custom 卡片（网易云外链试听兜底）
+            payload = self.formatter.build_custom_card_payload(
+                song, target, is_private=event.is_private_chat()
+            )
+            audio = payload["message"][0]["data"]["audio"]
+            if not audio:
+                logger.warning("[识曲] custom 卡片无音频地址，放弃卡片")
+                return False
+            await bot.api.call_action(action, **payload)
             return True
         except Exception as e:
             logger.warning(f"card send failed: {e}")

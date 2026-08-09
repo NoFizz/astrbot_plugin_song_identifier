@@ -140,3 +140,35 @@ def test_build_card_payload():
     assert message["data"]["singer"] == "周杰伦"
     assert message["data"]["audio"] == "http://audio/1.mp3"
     assert message["data"]["image"] == "http://cover/1.jpg"
+
+
+def test_build_card_payload_prefers_netease_163():
+    """有网易云歌曲 ID 时优先构造 163 卡片（仅需 id，不需要音频直链）。"""
+    fmt = ResultFormatter({})
+    song = SongInfo(title="晴天", artist="周杰伦", song_id="487527980", source="netease")
+    payload = fmt.build_card_payload(song, "123456")
+    message = payload["message"][0]
+    assert message["type"] == "music"
+    assert message["data"]["type"] == "163"
+    assert message["data"]["id"] == "487527980"
+
+
+def test_build_custom_card_payload_uses_netease_outer_url():
+    """custom 兜底卡片：有 song_id 时用网易云官方外链试听作为音频地址。"""
+    fmt = ResultFormatter({})
+    song = SongInfo(title="晴天", artist="周杰伦", song_id="487527980", source="netease")
+    payload = fmt.build_custom_card_payload(song, "123456")
+    message = payload["message"][0]
+    assert message["data"]["type"] == "custom"
+    assert (
+        message["data"]["audio"]
+        == "https://music.163.com/song/media/outer/url?id=487527980.mp3"
+    )
+    assert message["data"]["url"] == message["data"]["audio"]
+
+
+def test_format_link():
+    fmt = ResultFormatter({})
+    song = SongInfo(title="晴天", artist="周杰伦", song_id="001", source="netease")
+    assert fmt.format_link(song) == "🔗 https://music.163.com/song/001"
+    assert fmt.format_link(SongInfo(title="晴天")) is None

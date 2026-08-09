@@ -278,7 +278,9 @@ async def test_pipeline_card_mode_group_success(monkeypatch):
     assert action == "send_group_msg"
     assert payload["group_id"] == "g1"
     assert payload["message"][0]["data"]["title"] == "晴天"
-    assert ev.sent == []
+    # output_link 独立开关：卡片发送后附加试听链接
+    assert len(ev.sent) == 1
+    assert "🔗" in ev.sent[0]["text"]
 
 
 @pytest.mark.asyncio
@@ -333,3 +335,76 @@ async def test_pipeline_materialize_failed_hint(monkeypatch):
     assert len(ev.sent) == 1
     assert "媒体文件获取失败" in ev.sent[0]["text"]
     assert ev.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_pipeline_image_mode_appends_link_when_enabled(monkeypatch):
+    """image 模式 + output_link 开启：图片卡片之后附加试听链接。"""
+    plugin = make_plugin(
+        identifier_result=SongInfo(
+            title="晴天", artist="周杰伦", song_id="001", source="netease"
+        )
+    )
+    plugin.config["output_format"] = "image"
+
+    async def fake_build_image(song):
+        return b"FAKEJPEG"
+
+    monkeypatch.setattr(plugin.formatter, "build_image", fake_build_image)
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲"
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 2
+    assert ev.sent[0]["type"] == "chain"
+    assert "🔗" in ev.sent[1]["text"]
+    assert "https://music.163.com/song/001" in ev.sent[1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_image_mode_link_disabled(monkeypatch):
+    """image 模式 + output_link 关闭：只发图片，不附加链接。"""
+    plugin = make_plugin(
+        identifier_result=SongInfo(
+            title="晴天", artist="周杰伦", song_id="001", source="netease"
+        )
+    )
+    plugin.config["output_format"] = "image"
+    plugin.config["output_link"] = False
+
+    async def fake_build_image(song):
+        return b"FAKEJPEG"
+
+    monkeypatch.setattr(plugin.formatter, "build_image", fake_build_image)
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = MockEvent(
+        messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲"
+    )
+
+    async def fake_materialize(self, comp):
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return path
+
+    from astrbot_plugin_song_identifier.main import MediaMaterializer
+
+    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
+
+    await plugin.on_message(ev)
+    assert len(ev.sent) == 1
+    assert ev.sent[0]["type"] == "chain"

@@ -143,13 +143,13 @@
                 "hint": "文本=纯文本（格式可用下方模板自定义）；图片=图片卡片（含专辑封面）；卡片=QQ 音乐卡片（发送失败自动降级为文本）"
             },
             "text_template": {
-                "description": "换行符：\\n 占位符：{title} 歌名、{artist} 歌手、{album} 专辑（{album} 仅 ACRCloud 系引擎有值）",
+                "description": "文本输出模板",
                 "type": "string",
                 "default": "{title} - {artist}",
                 "editor_mode": true,
                 "editor_language": "plaintext",
                 "editor_theme": "vs-dark",
-                "hint": "输出格式，占位符：{title} 歌名、{artist} 歌手、{album} 专辑；回车或 \\n/\\r\\n 换行；{album} 仅 ACRCloud 系引擎有值，其他引擎自动忽略；「输出歌名/歌手」关闭时对应占位符忽略"
+                "hint": "换行符：\\n 占位符：{title} 歌名、{artist} 歌手、{album} 专辑（{album} 仅 ACRCloud 系引擎有值）"
             },
             "title": {
                 "description": "输出歌名",

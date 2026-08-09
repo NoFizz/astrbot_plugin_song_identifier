@@ -1218,7 +1218,13 @@ class ResultFormatter:
             "artist": song.artist if (artist_enabled and song.artist) else "",
             "album": song.album or "",
         }
-        text = template
+        # 解析模板中手写的字面转义序列（\r\n → 真实 CRLF，\n → LF，\t → 制表符）；
+        # 编辑器直接回车的真实换行不受影响（不匹配字面反斜杠序列）
+        text = (
+            template.replace("\\r\\n", "\r\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+        )
         for key, value in values.items():
             text = text.replace("{" + key + "}", value)
         # 占位符为空后残留分隔符的清理：仅处理空格/制表符，绝不触碰换行（\r\n 原样保留）

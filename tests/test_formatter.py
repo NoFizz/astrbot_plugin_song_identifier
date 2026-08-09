@@ -93,6 +93,28 @@ def test_text_template_preserves_crlf_newlines():
     assert fmt.format_text(song) == "歌名：晴天\r\n歌手：周杰伦"
 
 
+def test_text_template_parses_literal_escapes():
+    """模板中手写的字面 \\r\\n / \\n / \\t 应被解析为真实控制字符。"""
+    fmt = ResultFormatter(
+        make_cfg(text_template="歌名：{title}\\r\\n歌手：{artist}\\n专辑：{album}\\t备注")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", album="叶惠美", source="acrcloud")
+    out = fmt.format_text(song)
+    assert out == "歌名：晴天\r\n歌手：周杰伦\n专辑：叶惠美\t备注"
+    assert "\r\n" in out  # 真实 CRLF，而非字面反斜杠序列
+    assert "\\r\\n" not in out
+
+
+def test_text_template_real_and_literal_newlines_coexist():
+    """真实回车与字面 \\r\\n 混用：各自正确处理，互不干扰。"""
+    fmt = ResultFormatter(
+        make_cfg(text_template="歌名：{title}\r\n歌手：{artist}\\r\\n（推荐）")
+    )
+    song = SongInfo(title="晴天", artist="周杰伦", source="acrcloud")
+    out = fmt.format_text(song)
+    assert out == "歌名：晴天\r\n歌手：周杰伦\r\n（推荐）"
+
+
 def test_text_template_middle_placeholder_cleanup():
     """中间的 {album} 为空时，残留的 " - " 分隔符被清理且不破坏其他内容。"""
     fmt = ResultFormatter(

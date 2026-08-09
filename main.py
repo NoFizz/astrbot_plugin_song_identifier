@@ -147,19 +147,75 @@ class MediaMaterializer:
             本地音频文件路径；无法落地时返回 None。
         """
         if isinstance(component, Record):
-            return await component.convert_to_file_path()
+            src = (
+                f"file={component.file!r}, url={component.url!r}, path={component.path!r}"
+            )
+            logger.info(f"[识曲] 语音段属性: {src}")
+            path = await component.convert_to_file_path()
+            if path:
+                logger.info(f"[识曲] 语音转码完成: {path}")
+            return path
         if isinstance(component, Video):
             video_path = await component.convert_to_file_path()
             if not video_path:
+                logger.warning("[识曲] 视频下载失败（convert_to_file_path 返回空）")
                 return None
+            video_size = os.path.getsize(video_path) if os.path.exists(video_path) else 0
+            logger.info(
+                f"[识曲] 视频已就绪: {video_path} ({video_size} bytes), "
+                f"截取前 {self.max_seconds}s 抽音轨"
+            )
             out_path = str(
                 Path(tempfile.gettempdir())
                 / f"songid_{os.getpid()}_{uuid.uuid4().hex}.wav"
             )
-            return await self._extract_audio_from_video(video_path, out_path)
+            result = await self._extract_audio_from_video(video_path, out_path)
+            if result:
+                out_size = (
+                    os.path.getsize(result) if os.path.exists(result) else 0
+                )
+                logger.info(f"[识曲] 音轨提取完成: {result} ({out_size} bytes)")
+            return result
         if isinstance(component, File):
-            return await component.get_file(allow_return_url=False)
+            logger.info(
+                f"[识曲] 文件段: name={component.name!r}, "
+                f"url={component.url!r}, local={component.file_!r}"
+            )
+            path = await component.get_file(allow_return_url=False)
+            if path:
+                logger.info(f"[识曲] 文件下载完成: {path}")
+            return path
+        logger.warning(f"[识曲] 不支持的媒体段类型: {type(component).__name__}")
         return None
+
+    async def _probe_duration(self, path: str) -> float | None:
+        """用 ffprobe 探测音频时长（秒）。
+
+        Args:
+            path: 本地音频文件路径。
+
+        Returns:
+            时长（秒）；探测失败时返回 None。
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+            return float(out.decode().strip())
+        except (OSError, ValueError):
+            return None
 
     async def _extract_audio_from_video(
         self, video_path: str, out_path: str
@@ -307,8 +363,15 @@ class AcrcloudEngine:
         form.add_field("channels", "1")
         url = self.host if self.host.startswith("http") else f"https://{self.host}"
         url = url.rstrip("/") + "/v1/identify"
+        logger.info(
+            f"[识曲] ACRCloud 请求: {url}, 上传音频 {len(sample)} bytes"
+        )
         async with session.post(url, data=form) as resp:
             text = await resp.text()
+        logger.info(
+            f"[识曲] ACRCloud 响应: HTTP {resp.status}, {len(text)} bytes"
+        )
+        logger.info(f"[识曲] ACRCloud 响应内容: {text[:200]}")
         try:
             payload = json.loads(text)
         except ValueError:
@@ -439,6 +502,11 @@ class XfyunAcrEngine:
             }
             async with session.post(url, json=body) as resp:
                 text = await resp.text()
+            logger.info(
+                f"[识曲] 讯飞音乐识别请求完成: HTTP {resp.status}, "
+                f"{len(text)} bytes"
+            )
+            logger.info(f"[识曲] 讯飞音乐识别响应: {text[:200]}")
             try:
                 payload = json.loads(text)
             except ValueError:
@@ -581,6 +649,11 @@ class XfyunHummingEngine:
                 self.url, data=audio_bytes, headers=headers
             ) as resp:
                 text = await resp.text()
+            logger.info(
+                f"[识曲] 讯飞哼唱识别请求完成: HTTP {resp.status}, "
+                f"上传 {len(audio_bytes)} bytes, 响应 {len(text)} bytes"
+            )
+            logger.info(f"[识曲] 讯飞哼唱识别响应: {text[:200]}")
             try:
                 payload = json.loads(text)
             except ValueError:
@@ -919,7 +992,20 @@ class SongIdentifierPlugin(Star):
         mode = self.detector.check(event)
         if mode is None:
             return
-        logger.info(f"[识曲] 触发模式: {mode}（群={not event.is_private_chat()}）")
+        logger.info(
+            f"[识曲] 触发检测命中: 模式={mode}, 群聊={not event.is_private_chat()}, "
+            f"发送者={event.get_sender_id()}"
+        )
+
+        messages = event.get_messages() or []
+        for comp in messages:
+            if isinstance(comp, Reply):
+                logger.info(
+                    f"[识曲] 引用消息: id={comp.id}, sender="
+                    f"{comp.sender_nickname}({comp.sender_id}), "
+                    f"文本='{(comp.message_str or '')[:50]}'"
+                )
+                break
 
         media = MediaExtractor.extract_media(event)
         if media is None:
@@ -936,9 +1022,13 @@ class SongIdentifierPlugin(Star):
                 await event.send(event.plain_result("媒体文件获取失败，请重试。"))
                 event.stop_event()
                 return
+            size = os.path.getsize(audio_path)
+            duration = await self.materializer._probe_duration(audio_path)
+            fmt = Path(audio_path).suffix.lstrip(".") or "?"
             logger.info(
-                f"[识曲] 本地音频: {audio_path} "
-                f"({os.path.getsize(audio_path)} bytes)"
+                f"[识曲] 音频就绪: 路径={audio_path}, 格式={fmt}, "
+                f"大小={size} bytes ({size / 1024:.1f} KB)"
+                + (f", 时长={duration:.1f}s" if duration is not None else ", 时长=未知")
             )
 
             timeout = aiohttp.ClientTimeout(
@@ -988,15 +1078,21 @@ class SongIdentifierPlugin(Star):
         if fmt == "card":
             ok = await self._try_send_card(event, song)
             if ok:
+                logger.info("[识曲] QQ 音乐卡片发送成功")
                 return
+            logger.warning("[识曲] 卡片发送失败/不支持，降级为文本")
         if fmt == "image":
             image_bytes = await self.formatter.build_image(song)
             if image_bytes:
                 await event.send(
                     event.chain_result([Comp.Image.fromBytes(image_bytes)])
                 )
+                logger.info(f"[识曲] 图片卡片发送完成 ({len(image_bytes)} bytes)")
                 return
-        await event.send(event.plain_result(self.formatter.format_text(song)))
+            logger.warning("[识曲] 图片生成失败，降级为文本")
+        text = self.formatter.format_text(song)
+        await event.send(event.plain_result(text))
+        logger.info(f"[识曲] 文本结果发送完成: {text[:80]}")
 
     async def _try_send_card(self, event: AstrMessageEvent, song: SongInfo) -> bool:
         """尝试发送 QQ 音乐卡片；不支持时返回 False 降级。

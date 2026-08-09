@@ -146,7 +146,10 @@
                 "description": "文本输出模板",
                 "type": "string",
                 "default": "{title} - {artist}",
-                "hint": "文本模式的输出格式，可用占位符：{title} 歌名、{artist} 歌手、{album} 专辑。专辑占位符仅 ACRCloud 系引擎（ACRCloud、讯飞开放平台 ACRCloud）有值，使用其他引擎时自动忽略该占位符；上方「输出歌名/歌手」开关关闭时对应占位符同样被忽略"
+                "editor_mode": true,
+                "editor_language": "plaintext",
+                "editor_theme": "vs-dark",
+                "hint": "文本模式的输出格式，可用占位符：{title} 歌名、{artist} 歌手、{album} 专辑。支持多行（回车换行）。专辑占位符仅 ACRCloud 系引擎（ACRCloud、讯飞开放平台 ACRCloud）有值，使用其他引擎时自动忽略该占位符；上方「输出歌名/歌手」开关关闭时对应占位符同样被忽略"
             },
             "title": {
                 "description": "输出歌名",

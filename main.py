@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
+import httpx
 
 from astrbot.api.message_components import At, File, Record, Reply, Video
 from astrbot.api.star import Context, Star, register
@@ -582,3 +583,53 @@ def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:
     return SongIdentifier(
         engines=engines, timeout=float(config.get("identify_timeout", 30))
     ), humming
+
+
+class SongEnricher:
+    """用歌名+歌手在 txqq.pro 聚合搜索，补全国内平台封面/试听链接/歌曲ID。"""
+
+    SEARCH_URL = "https://music.txqq.pro/"
+
+    def __init__(self, platform: str = "qq"):
+        self.platform = platform
+
+    async def enrich(self, song: SongInfo) -> SongInfo:
+        query = f"{song.title or ''} {song.artist or ''}".strip()
+        if not query:
+            return song
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    self.SEARCH_URL,
+                    data={
+                        "input": query,
+                        "filter": "name",
+                        "type": self.platform,
+                        "page": 1,
+                    },
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/120.0 Safari/537.36"
+                        ),
+                        "Referer": self.SEARCH_URL,
+                    },
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+        except Exception:
+            return song
+        items = (payload or {}).get("data") or []
+        if not items:
+            return song
+        first = items[0]
+        return SongInfo(
+            title=song.title,
+            artist=song.artist,
+            album=song.album,
+            cover_url=first.get("pic") or song.cover_url,
+            audio_url=first.get("url") or first.get("link") or song.audio_url,
+            song_id=str(first.get("songid") or "") or song.song_id,
+            source=song.source,
+        )

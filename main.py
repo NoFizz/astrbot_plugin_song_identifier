@@ -1,6 +1,7 @@
 import asyncio
 import os
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -110,7 +111,7 @@ class MediaMaterializer:
                 return None
             out_path = str(
                 Path(tempfile.gettempdir())
-                / f"songid_{os.getpid()}_{abs(hash(video_path))}.wav"
+                / f"songid_{os.getpid()}_{uuid.uuid4().hex}.wav"
             )
             return await self._extract_audio_from_video(video_path, out_path)
         if isinstance(component, File):
@@ -129,22 +130,25 @@ class MediaMaterializer:
         Returns:
             成功时返回 out_path；ffmpeg 失败或输出不存在时返回 None。
         """
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-y",
-            "-i",
-            video_path,
-            "-vn",
-            "-acodec",
-            "pcm_s16le",
-            "-ar",
-            "44100",
-            "-ac",
-            "1",
-            out_path,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i",
+                video_path,
+                "-vn",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "44100",
+                "-ac",
+                "1",
+                out_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError:
+            return None
         await proc.wait()
         if proc.returncode != 0 or not os.path.exists(out_path):
             return None

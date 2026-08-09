@@ -278,7 +278,9 @@ def parse_xfyun_acr_response(payload: dict) -> SongInfo | None:
     """解析讯飞 ACRCloud 音乐识别响应（内层为 ACRCloud 格式）。"""
     if payload.get("header", {}).get("code") != 0:
         return None
-    text_b64 = (payload.get("payload") or {}).get("output_text", {}).get("text", "")
+    text_b64 = (((payload.get("payload") or {}).get("output_text")) or {}).get(
+        "text", ""
+    )
     if not text_b64:
         return None
     try:
@@ -362,8 +364,7 @@ class XfyunAcrEngine:
     async def _to_mp3(self, wav_path: str) -> str | None:
         """wav → 16k 单声道 mp3（lame），供讯飞接口使用。"""
         mp3_path = str(
-            Path(tempfile.gettempdir())
-            / f"xfyun_{os.getpid()}_{abs(hash(wav_path))}.mp3"
+            Path(tempfile.gettempdir()) / f"xfyun_{os.getpid()}_{uuid.uuid4().hex}.mp3"
         )
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -381,7 +382,7 @@ class XfyunAcrEngine:
                 "64k",
                 mp3_path,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
         except OSError:
             return None

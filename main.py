@@ -126,6 +126,17 @@ class MediaExtractor:
 class MediaMaterializer:
     """将媒体段落地为本地音频文件（语音→wav，视频→抽音轨wav，文件→原格式）。"""
 
+    def __init__(self, max_seconds: int = 30):
+        """初始化媒体落地器。
+
+        Args:
+            max_seconds: 视频抽音轨时的最大时长（秒）。ACRCloud 官方建议
+                识别内容小于 12 秒且文件小于 1MB（30s×16k×16bit≈960KB），
+                超长音频会生成超大 wav 导致上传受限或识别失败，因此按需
+                截取前 N 秒。
+        """
+        self.max_seconds = max_seconds
+
     async def materialize(self, component) -> str | None:
         """把媒体段落地为本地音频文件路径。
 
@@ -153,7 +164,7 @@ class MediaMaterializer:
     async def _extract_audio_from_video(
         self, video_path: str, out_path: str
     ) -> str | None:
-        """用 ffmpeg 从视频中抽取音轨为单声道 44.1kHz wav。
+        """用 ffmpeg 从视频中抽取音轨：截取前 max_seconds 秒、16k 单声道 wav。
 
         Args:
             video_path: 本地视频文件路径。
@@ -168,11 +179,13 @@ class MediaMaterializer:
                 "-y",
                 "-i",
                 video_path,
+                "-t",
+                str(self.max_seconds),
                 "-vn",
                 "-acodec",
                 "pcm_s16le",
                 "-ar",
-                "44100",
+                "16000",
                 "-ac",
                 "1",
                 out_path,
@@ -204,10 +217,32 @@ class MediaMaterializer:
 
 
 def build_acrcloud_signature(
-    access_key: str, access_secret: str, timestamp: str
+    access_key: str,
+    access_secret: str,
+    timestamp: str,
+    data_type: str = "audio",
+    signature_version: str = "1",
 ) -> str:
-    """构造 ACRCloud 识别接口签名（官方算法）。"""
-    string_to_sign = f"POST\n/v1/identify\n{access_key}\n{timestamp}"
+    """构造 ACRCloud V1 识别接口签名（官方算法，docs.acrcloud.cn/api/identification-api.html）。
+
+    签名串格式（换行分隔）：
+    ``POST\\n/v1/identify\\n{access_key}\\n{data_type}\\n{signature_version}\\n{timestamp}``
+    其中 data_type 为 "audio"，signature_version 为 "1"。
+
+    Args:
+        access_key: 控制台中的 access_key。
+        access_secret: 控制台中的 access_secret。
+        timestamp: 请求时间戳（字符串形式，与表单字段一致）。
+        data_type: 识别数据类型，固定 "audio"。
+        signature_version: 签名版本，固定 "1"。
+
+    Returns:
+        base64 编码的 HMAC-SHA1 签名。
+    """
+    string_to_sign = (
+        f"POST\n/v1/identify\n{access_key}\n"
+        f"{data_type}\n{signature_version}\n{timestamp}"
+    )
     digest = hmac.new(
         access_secret.encode(), string_to_sign.encode(), hashlib.sha1
     ).digest()
@@ -273,7 +308,13 @@ class AcrcloudEngine:
         url = self.host if self.host.startswith("http") else f"https://{self.host}"
         url = url.rstrip("/") + "/v1/identify"
         async with session.post(url, data=form) as resp:
-            payload = await resp.json()
+            text = await resp.text()
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            # ACRCloud 对超长/无效音频会以 text/plain 返回错误文本而非 JSON
+            logger.warning(f"ACRCloud 响应非 JSON: {text[:200]}")
+            return None
         return parse_acrcloud_response(payload)
 
 
@@ -397,7 +438,12 @@ class XfyunAcrEngine:
                 },
             }
             async with session.post(url, json=body) as resp:
-                payload = await resp.json()
+                text = await resp.text()
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                logger.warning(f"讯飞音乐识别响应非 JSON: {text[:200]}")
+                return None
             return parse_xfyun_acr_response(payload)
         finally:
             try:
@@ -534,7 +580,12 @@ class XfyunHummingEngine:
             async with session.post(
                 self.url, data=audio_bytes, headers=headers
             ) as resp:
-                payload = await resp.json()
+                text = await resp.text()
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                logger.warning(f"讯飞哼唱识别响应非 JSON: {text[:200]}")
+                return None
             return parse_qbh_response(payload)
         finally:
             try:
@@ -604,15 +655,24 @@ class SongIdentifier:
     async def identify(self, audio_path: str, session) -> SongInfo | None:
         async def _run() -> SongInfo | None:
             for engine in self.engines:
+                name = type(engine).__name__
                 try:
                     if not engine.is_configured():
+                        logger.info(f"[识曲] 引擎 {name} 未配置，跳过")
                         continue
+                    logger.info(f"[识曲] 尝试引擎 {name} ...")
                     info = await engine.identify(audio_path, session)
                     if info is not None:
+                        logger.info(
+                            f"[识曲] 引擎 {name} 识别成功: "
+                            f"{info.title} - {info.artist or '未知歌手'}"
+                        )
                         return info
+                    logger.info(f"[识曲] 引擎 {name} 无结果，尝试下一引擎")
                 except Exception as e:
-                    logger.warning(f"engine {type(engine).__name__} failed: {e}")
+                    logger.warning(f"[识曲] 引擎 {name} 失败: {e}")
                     continue
+            logger.warning("[识曲] 所有引擎均未识别出歌曲")
             return None
 
         return await asyncio.wait_for(_run(), timeout=self.timeout)
@@ -672,6 +732,7 @@ class SongEnricher:
         query = f"{song.title or ''} {song.artist or ''}".strip()
         if not query:
             return song
+        logger.info(f"[识曲] 增强查询: '{query}' (platform={self.platform})")
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
@@ -694,13 +755,15 @@ class SongEnricher:
                 resp.raise_for_status()
                 payload = resp.json()
         except Exception as e:
-            logger.warning(f"enrich failed: {e}")
+            logger.warning(f"[识曲] 增强失败: {e}")
             return song
         items = []
         if isinstance(payload, dict):
             items = payload.get("data") or []
         if not items:
+            logger.info("[识曲] 增强未命中，使用识别引擎原始信息")
             return song
+        logger.info(f"[识曲] 增强命中 {len(items)} 条，取第一条")
         first = items[0]
         return SongInfo(
             title=song.title,
@@ -839,7 +902,9 @@ class SongIdentifierPlugin(Star):
             config.get("trigger_keyword", "识曲"),
             config.get("humming_keyword", "哼唱"),
         )
-        self.materializer = MediaMaterializer()
+        self.materializer = MediaMaterializer(
+            max_seconds=int(config.get("audio_max_seconds", 30))
+        )
         self.identifier, self.humming_engine = build_engines(config)
         self.enricher = SongEnricher(platform="qq")
         self.formatter = ResultFormatter(config)
@@ -854,19 +919,27 @@ class SongIdentifierPlugin(Star):
         mode = self.detector.check(event)
         if mode is None:
             return
+        logger.info(f"[识曲] 触发模式: {mode}（群={not event.is_private_chat()}）")
 
         media = MediaExtractor.extract_media(event)
         if media is None:
+            logger.info("[识曲] 引用消息中无媒体段，提示用户")
             await event.send(event.plain_result("请引用包含语音或视频的消息后再试。"))
             event.stop_event()
             return
+        logger.info(f"[识曲] 媒体段类型: {type(media).__name__}")
 
         try:
             audio_path = await self.materializer.materialize(media)
             if not audio_path or not os.path.exists(audio_path):
+                logger.warning("[识曲] 媒体落地失败（无本地音频文件）")
                 await event.send(event.plain_result("媒体文件获取失败，请重试。"))
                 event.stop_event()
                 return
+            logger.info(
+                f"[识曲] 本地音频: {audio_path} "
+                f"({os.path.getsize(audio_path)} bytes)"
+            )
 
             timeout = aiohttp.ClientTimeout(
                 total=float(self.config.get("identify_timeout", 30))
@@ -883,15 +956,22 @@ class SongIdentifierPlugin(Star):
                     if mode == "music"
                     else "未能识别出哼唱的歌曲，请再唱得清晰一些。"
                 )
+                logger.warning(f"[识曲] 识别失败: {hint}")
                 await event.send(event.plain_result(hint))
                 event.stop_event()
                 return
 
+            logger.info(
+                f"[识曲] 识别成功: {song.title} - {song.artist or '未知歌手'} "
+                f"(source={song.source})"
+            )
             song = await self.enricher.enrich(song)
             await self._send_result(event, song)
         except asyncio.TimeoutError:
+            logger.warning("[识曲] 识别超时")
             await event.send(event.plain_result("识别超时，请稍后重试。"))
         except Exception as e:
+            logger.exception(f"[识曲] 主流程异常: {e}")
             await event.send(event.plain_result(f"识曲出错：{e}"))
         finally:
             event.stop_event()
@@ -904,6 +984,7 @@ class SongIdentifierPlugin(Star):
             song: 识别到的歌曲信息。
         """
         fmt = self.config.get("output_format", "text")
+        logger.info(f"[识曲] 输出格式: {fmt}")
         if fmt == "card":
             ok = await self._try_send_card(event, song)
             if ok:

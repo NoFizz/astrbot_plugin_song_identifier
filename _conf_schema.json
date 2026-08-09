@@ -84,5 +84,10 @@
         "description": "讯飞 APIKey（歌曲识别 qbh 哼唱识别）",
         "type": "string",
         "default": ""
+    },
+    "audio_max_seconds": {
+        "description": "视频抽音轨时截取的最大时长（秒）。识曲引擎建议识别内容小于 12 秒、文件小于 1MB（30 秒≈960KB）；超长音频会导致识别失败",
+        "type": "int",
+        "default": 30
     }
 }

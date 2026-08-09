@@ -225,3 +225,23 @@ class AcrcloudEngine:
         async with session.post(url, data=form) as resp:
             payload = await resp.json()
         return parse_acrcloud_response(payload)
+
+
+class ShazamEngine:
+    """Shazam 备用识曲引擎（shazamio 非官方接口）。"""
+
+    async def identify(self, audio_path: str, session) -> SongInfo | None:
+        try:
+            from shazamio import Shazam
+
+            out = await Shazam().recognize(audio_path)
+        except Exception:
+            return None
+        if not out or not out.get("track"):
+            return None
+        track = out["track"]
+        return SongInfo(
+            title=track.get("title"),
+            artist=track.get("subtitle") or None,
+            source="shazam",
+        )

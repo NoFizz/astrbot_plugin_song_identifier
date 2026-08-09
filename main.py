@@ -1,9 +1,15 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import os
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+import aiohttp
 
 from astrbot.api.message_components import At, File, Record, Reply, Video
 from astrbot.api.star import Context, Star, register
@@ -153,3 +159,65 @@ class MediaMaterializer:
         if proc.returncode != 0 or not os.path.exists(out_path):
             return None
         return out_path
+
+
+def build_acrcloud_signature(access_key: str, access_secret: str, timestamp: str) -> str:
+    """构造 ACRCloud 识别接口签名（官方算法）。"""
+    string_to_sign = f"POST\n/v1/identify\n{access_key}\n{timestamp}"
+    digest = hmac.new(
+        access_secret.encode(), string_to_sign.encode(), hashlib.sha1
+    ).digest()
+    return base64.b64encode(digest).decode()
+
+
+def parse_acrcloud_response(payload: dict) -> SongInfo | None:
+    """解析 ACRCloud 格式识别响应，返回歌曲信息；无结果返回 None。"""
+    if payload.get("status", {}).get("code") != 0:
+        return None
+    music = (payload.get("metadata") or {}).get("music") or []
+    if not music:
+        return None
+    first = music[0]
+    artists = ", ".join(
+        a.get("name", "") for a in (first.get("artists") or []) if a.get("name")
+    )
+    album = (first.get("album") or {}).get("name") or None
+    return SongInfo(
+        title=first.get("title"),
+        artist=artists or None,
+        album=album,
+        source="acrcloud",
+    )
+
+
+class AcrcloudEngine:
+    """ACRCloud 官方识曲引擎（aiohttp 直接实现 HTTP API + HMAC 签名）。"""
+
+    def __init__(self, host: str, access_key: str, access_secret: str):
+        self.host = host
+        self.access_key = access_key
+        self.access_secret = access_secret
+
+    def is_configured(self) -> bool:
+        return bool(self.host and self.access_key and self.access_secret)
+
+    async def identify(self, audio_path: str, session) -> SongInfo | None:
+        if not self.is_configured() or not os.path.exists(audio_path):
+            return None
+        timestamp = str(int(time.time()))
+        signature = build_acrcloud_signature(self.access_key, self.access_secret, timestamp)
+        form = aiohttp.FormData()
+        form.add_field("access_key", self.access_key)
+        form.add_field("sample", open(audio_path, "rb"),
+                       filename=Path(audio_path).name, content_type="application/octet-stream")
+        form.add_field("sample_bytes", str(os.path.getsize(audio_path)))
+        form.add_field("timestamp", timestamp)
+        form.add_field("signature", signature)
+        form.add_field("signature_version", "1")
+        form.add_field("data_type", "audio")
+        form.add_field("channels", "1")
+        url = self.host if self.host.startswith("http") else f"https://{self.host}"
+        url = url.rstrip("/") + "/v1/identify"
+        async with session.post(url, data=form) as resp:
+            payload = await resp.json()
+        return parse_acrcloud_response(payload)

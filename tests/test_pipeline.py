@@ -75,7 +75,7 @@ class MockEvent:
         self.stopped = True
 
 
-def make_plugin(identifier_result=None, humming_result=None):
+def make_plugin(identifier_result=None):
     from astrbot_plugin_song_identifier.main import (
         MediaMaterializer,
         ResultFormatter,
@@ -86,11 +86,13 @@ def make_plugin(identifier_result=None, humming_result=None):
     plugin.config = {
         "trigger": {
             "keyword": "识曲",
-            "humming_keyword": "哼唱",
         },
         "engines": {
-            "order": "xfyun,acrcloud,shazam",
-            "shazam": {"enabled": True},
+            "select": {
+                "primary": "ACRCloud官方",
+                "secondary": "讯飞ACRCloud（音乐识别）",
+                "fallback": "Shazam",
+            },
             "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
             "acrcloud": {"host": "h", "access_key": "K", "access_secret": "S"},
             "xfyun_humming": {"app_id": "A", "api_key": "K"},
@@ -102,15 +104,14 @@ def make_plugin(identifier_result=None, humming_result=None):
             "format": "text",
         },
         "advanced": {
-            "identify_timeout": 30,
+            "identify_timeout": 60,
             "audio_max_seconds": 30,
         },
     }
-    plugin.detector = TriggerDetector("识曲", "哼唱")
+    plugin.detector = TriggerDetector("识曲")
     plugin.materializer = MediaMaterializer()
     plugin.enricher = FakeEnricher()
     plugin.identifier = FakeIdentifier(identifier_result)
-    plugin.humming_engine = FakeIdentifier(humming_result)
     plugin.formatter = ResultFormatter(plugin.config)
     return plugin
 
@@ -140,34 +141,6 @@ async def test_full_pipeline_text_output(monkeypatch):
     assert len(ev.sent) == 1
     assert "晴天" in ev.sent[0]["text"]
     assert ev.stopped is True
-
-
-@pytest.mark.asyncio
-async def test_pipeline_humming_mode(monkeypatch):
-    plugin = make_plugin(
-        humming_result=SongInfo(
-            title="千里之外", artist="周杰伦", source="xfyun_humming"
-        )
-    )
-
-    record = Record(file="x.amr")
-    reply = Reply(id="1", chain=[record])
-    ev = MockEvent(
-        messages=[At(qq="bot-1"), Plain(text="哼唱"), reply], message_str="哼唱"
-    )
-
-    async def fake_materialize(self, comp):
-        fd, path = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        return path
-
-    from astrbot_plugin_song_identifier.main import MediaMaterializer
-
-    monkeypatch.setattr(MediaMaterializer, "materialize", fake_materialize)
-
-    await plugin.on_message(ev)
-    assert len(ev.sent) == 1
-    assert "千里之外" in ev.sent[0]["text"]
 
 
 @pytest.mark.asyncio

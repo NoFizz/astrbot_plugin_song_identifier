@@ -57,57 +57,64 @@ async def test_cascade_all_fail():
     assert await identifier.identify("/tmp/fake.wav", object()) is None
 
 
-def make_engines_config(order, shazam_enabled=True):
+def make_engines_config(primary="", secondary="", fallback=""):
     return {
         "engines": {
-            "order": order,
-            "shazam": {"enabled": shazam_enabled},
+            "select": {
+                "primary": primary,
+                "secondary": secondary,
+                "fallback": fallback,
+            },
             "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
             "acrcloud": {"host": "h", "access_key": "K", "access_secret": "S"},
             "xfyun_humming": {"app_id": "", "api_key": ""},
         },
-        "advanced": {"identify_timeout": 30},
+        "advanced": {"identify_timeout": 60},
     }
 
 
-def test_build_engines_order(monkeypatch):
-    identifier, humming = build_engines(
-        make_engines_config("xfyun,acrcloud,shazam")
+def test_build_engines_order():
+    identifier = build_engines(
+        make_engines_config(
+            primary="ACRCloud官方",
+            secondary="讯飞ACRCloud（音乐识别）",
+            fallback="Shazam",
+        )
     )
     engines = identifier.engines
-    assert isinstance(engines[0], XfyunAcrEngine)
-    assert isinstance(engines[1], AcrcloudEngine)
+    assert isinstance(engines[0], AcrcloudEngine)
+    assert isinstance(engines[1], XfyunAcrEngine)
     assert isinstance(engines[2], ShazamEngine)
-    assert isinstance(humming, XfyunHummingEngine)
 
 
-def test_build_engines_skips_unknown_and_empty(monkeypatch):
-    identifier, _ = build_engines(make_engines_config("shazam,,unknown"))
+def test_build_engines_skips_empty_slots():
+    """空档位跳过：只配置首选，则引擎链只有首选。"""
+    identifier = build_engines(make_engines_config(primary="ACRCloud官方"))
     names = [type(e).__name__ for e in identifier.engines]
-    assert names == ["ShazamEngine"]
+    assert names == ["AcrcloudEngine"]
 
 
-def test_build_engines_shazam_disabled():
-    identifier, _ = build_engines(make_engines_config("xfyun,shazam", shazam_enabled=False))
-    names = [type(e).__name__ for e in identifier.engines]
-    assert names == ["XfyunAcrEngine"]
+def test_build_engines_all_empty():
+    """全部留空 → 空引擎链（识别必然失败，但不报错）。"""
+    identifier = build_engines(make_engines_config())
+    assert identifier.engines == []
 
 
-def test_build_engines_humming_falls_back_to_xfyun_keys():
-    """哼唱引擎未单独配置时复用讯飞 ACRCloud 凭据。"""
-    config = {
-        "engines": {
-            "order": "xfyun",
-            "shazam": {"enabled": False},
-            "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
-            "acrcloud": {"host": "h", "access_key": "K", "access_secret": "S"},
-            "xfyun_humming": {"app_id": "", "api_key": ""},
-        },
-        "advanced": {"identify_timeout": 30},
-    }
-    _, humming = build_engines(config)
-    assert humming.app_id == "A"
-    assert humming.api_key == "K"
+def test_build_engines_unknown_label_skipped():
+    """无法识别的标签当作空处理。"""
+    identifier = build_engines(make_engines_config(primary="不存在的东西"))
+    assert identifier.engines == []
+
+
+def test_build_engines_humming_slot_uses_xfyun_humming_keys():
+    """选中讯飞哼唱识别档位时，哼唱引擎复用讯飞 ACRCloud 凭据。"""
+    config = make_engines_config(primary="讯飞哼唱识别")
+    identifier = build_engines(config)
+    engines = identifier.engines
+    assert len(engines) == 1
+    assert isinstance(engines[0], XfyunHummingEngine)
+    assert engines[0].app_id == "A"
+    assert engines[0].api_key == "K"
 
 
 @pytest.mark.asyncio

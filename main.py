@@ -86,37 +86,31 @@ class SongInfo:
 
 
 class TriggerDetector:
-    """判断消息触发模式：群聊需 @bot + 关键词 + 引用；私聊只需关键词 + 引用。
+    """判断消息是否触发识曲：群聊需 @bot + 关键词 + 引用；私聊只需关键词 + 引用。
 
     Returns:
-        "music"（识曲）/"humming"（哼唱）/ None（不触发）
+        True 表示触发识曲，False 表示不触发。
     """
 
-    def __init__(self, keyword: str, humming_keyword: str = "哼唱"):
+    def __init__(self, keyword: str):
         self.keyword = keyword
-        self.humming_keyword = humming_keyword
 
-    def check(self, event) -> str | None:
+    def check(self, event) -> bool:
         messages = event.get_messages()
         if not messages:
-            return None
+            return False
         text = event.message_str or ""
-        mode = None
-        if self.keyword in text:
-            mode = "music"
-        elif self.humming_keyword in text:
-            mode = "humming"
-        if mode is None:
-            return None
+        if self.keyword not in text:
+            return False
         has_reply = any(isinstance(comp, Reply) for comp in messages)
         if not has_reply:
-            return None
+            return False
         if event.is_private_chat():
-            return mode
+            return True
         for comp in messages:
             if isinstance(comp, At) and str(comp.qq) == str(event.get_self_id()):
-                return mode
-        return None
+                return True
+        return False
 
 
 class MediaExtractor:
@@ -772,22 +766,17 @@ class SongIdentifier:
         return await asyncio.wait_for(_run(), timeout=self.timeout)
 
 
-def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:
-    """按配置构造引擎链和哼唱引擎。
+def build_engines(config: dict) -> SongIdentifier:
+    """按配置（首选/次选/备选三档）构造引擎链。
 
     Args:
-        config: 插件配置 dict（嵌套结构：engines.xfyun / engines.acrcloud 等）。
+        config: 插件配置 dict（嵌套结构：engines.select.primary 等）。
 
     Returns:
-        (SongIdentifier, XfyunHummingEngine) 元组。
+        SongIdentifier：按 首选→次选→备选 顺序排列的级联识别器。
     """
     engines_cfg = _cfg(config, "engines", default={}) or {}
-    engine_map = {
-        "xfyun": XfyunAcrEngine(
-            app_id=_cfg(engines_cfg, "xfyun", "app_id", default="") or "",
-            api_key=_cfg(engines_cfg, "xfyun", "api_key", default="") or "",
-            api_secret=_cfg(engines_cfg, "xfyun", "api_secret", default="") or "",
-        ),
+    instances = {
         "acrcloud": AcrcloudEngine(
             host=_cfg(engines_cfg, "acrcloud", "host", default="") or "",
             access_key=_cfg(engines_cfg, "acrcloud", "access_key", default="")
@@ -795,36 +784,45 @@ def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:
             access_secret=_cfg(engines_cfg, "acrcloud", "access_secret", default="")
             or "",
         ),
+        "xfyun": XfyunAcrEngine(
+            app_id=_cfg(engines_cfg, "xfyun", "app_id", default="") or "",
+            api_key=_cfg(engines_cfg, "xfyun", "api_key", default="") or "",
+            api_secret=_cfg(engines_cfg, "xfyun", "api_secret", default="") or "",
+        ),
+        "xfyun_humming": XfyunHummingEngine(
+            app_id=(
+                _cfg(engines_cfg, "xfyun_humming", "app_id", default="")
+                or _cfg(engines_cfg, "xfyun", "app_id", default="")
+                or ""
+            ),
+            api_key=(
+                _cfg(engines_cfg, "xfyun_humming", "api_key", default="")
+                or _cfg(engines_cfg, "xfyun", "api_key", default="")
+                or ""
+            ),
+        ),
+        "shazam": ShazamEngine(),
     }
-    if _cfg(engines_cfg, "shazam", "enabled", default=True):
-        engine_map["shazam"] = ShazamEngine()
+    # 配置下拉选项（中文标签）→ 引擎标识
+    label_to_key = {
+        "ACRCloud官方": "acrcloud",
+        "讯飞ACRCloud（音乐识别）": "xfyun",
+        "讯飞哼唱识别": "xfyun_humming",
+        "Shazam": "shazam",
+    }
 
     engines = []
     added = set()
-    order = str(
-        _cfg(engines_cfg, "order", default="xfyun,acrcloud,shazam") or ""
-    )
-    for name in [n.strip() for n in order.split(",")]:
-        if name in engine_map and name not in added:
-            engines.append(engine_map[name])
-            added.add(name)
-
-    humming = XfyunHummingEngine(
-        app_id=(
-            _cfg(engines_cfg, "xfyun_humming", "app_id", default="")
-            or _cfg(engines_cfg, "xfyun", "app_id", default="")
-            or ""
-        ),
-        api_key=(
-            _cfg(engines_cfg, "xfyun_humming", "api_key", default="")
-            or _cfg(engines_cfg, "xfyun", "api_key", default="")
-            or ""
-        ),
-    )
+    for slot in ("primary", "secondary", "fallback"):
+        label = _cfg(engines_cfg, "select", slot, default="") or ""
+        key = label_to_key.get(str(label).strip())
+        if key and key in instances and key not in added:
+            engines.append(instances[key])
+            added.add(key)
     return SongIdentifier(
         engines=engines,
-        timeout=float(_cfg(config, "advanced", "identify_timeout", default=30)),
-    ), humming
+        timeout=float(_cfg(config, "advanced", "identify_timeout", default=60)),
+    )
 
 
 class SongEnricher:
@@ -1116,15 +1114,14 @@ class SongIdentifierPlugin(Star):
         super().__init__(context)
         self.config = config
         self.detector = TriggerDetector(
-            _cfg(config, "trigger", "keyword", default="识曲") or "识曲",
-            _cfg(config, "trigger", "humming_keyword", default="哼唱") or "哼唱",
+            _cfg(config, "trigger", "keyword", default="识曲") or "识曲"
         )
         self.materializer = MediaMaterializer(
             max_seconds=int(
                 _cfg(config, "advanced", "audio_max_seconds", default=30)
             )
         )
-        self.identifier, self.humming_engine = build_engines(config)
+        self.identifier = build_engines(config)
         self.enricher = SongEnricher()
         self.formatter = ResultFormatter(config)
 
@@ -1135,11 +1132,10 @@ class SongIdentifierPlugin(Star):
         Args:
             event: 消息事件。
         """
-        mode = self.detector.check(event)
-        if mode is None:
+        if not self.detector.check(event):
             return
         logger.info(
-            f"[识曲] 触发检测命中: 模式={mode}, 群聊={not event.is_private_chat()}, "
+            f"[识曲] 触发检测命中: 群聊={not event.is_private_chat()}, "
             f"发送者={event.get_sender_id()}"
         )
 
@@ -1179,21 +1175,14 @@ class SongIdentifierPlugin(Star):
 
             timeout = aiohttp.ClientTimeout(
                 total=float(
-                    _cfg(self.config, "advanced", "identify_timeout", default=30)
+                    _cfg(self.config, "advanced", "identify_timeout", default=60)
                 )
             )
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                if mode == "humming":
-                    song = await self.humming_engine.identify(audio_path, session)
-                else:
-                    song = await self.identifier.identify(audio_path, session)
+                song = await self.identifier.identify(audio_path, session)
 
             if song is None:
-                hint = (
-                    "未能识别出歌曲，请确认音频清晰且时长足够（建议 15 秒以上）。"
-                    if mode == "music"
-                    else "未能识别出哼唱的歌曲，请再唱得清晰一些。"
-                )
+                hint = "未能识别出歌曲，请确认音频清晰且时长足够（建议 15 秒以上）。"
                 logger.warning(f"[识曲] 识别失败: {hint}")
                 await event.send(event.plain_result(hint))
                 event.stop_event()

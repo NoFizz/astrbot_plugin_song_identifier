@@ -20,51 +20,73 @@
             "select": {
                 "description": "引擎选择",
                 "type": "object",
-                "hint": "每档只能选择一款引擎；某档识别失败或无结果时自动尝试下一档。留空（空白项）则跳过该档",
+                "hint": "每档只能选择一款引擎；某档识别失败或无结果时自动尝试下一档。选择「无」则跳过该档",
                 "items": {
                     "primary": {
                         "description": "首选引擎",
                         "type": "string",
                         "options": [
-                            "",
-                            "ACRCloud官方",
-                            "讯飞ACRCloud（音乐识别）",
-                            "讯飞哼唱识别",
-                            "Shazam"
+                            "ACRCloud",
+                            "讯飞开放平台 ACRCloud",
+                            "讯飞开放平台",
+                            "Shazam",
+                            "无"
                         ],
-                        "default": "ACRCloud官方",
-                        "hint": "优先使用的引擎。讯飞ACRCloud（音乐识别）= 原声识别；讯飞哼唱识别 = 旋律识别"
+                        "default": "ACRCloud",
+                        "hint": "优先使用的引擎。讯飞开放平台 ACRCloud = 原声识别（听歌识曲）；讯飞开放平台 = 旋律识别（哼唱猜歌）"
                     },
                     "secondary": {
                         "description": "次选引擎",
                         "type": "string",
                         "options": [
-                            "",
-                            "ACRCloud官方",
-                            "讯飞ACRCloud（音乐识别）",
-                            "讯飞哼唱识别",
-                            "Shazam"
+                            "ACRCloud",
+                            "讯飞开放平台 ACRCloud",
+                            "讯飞开放平台",
+                            "Shazam",
+                            "无"
                         ],
-                        "default": "讯飞ACRCloud（音乐识别）",
-                        "hint": "首选引擎失败或无结果时尝试。留空则跳过"
+                        "default": "讯飞开放平台 ACRCloud",
+                        "hint": "首选引擎失败或无结果时尝试。选择「无」则跳过"
                     },
                     "fallback": {
                         "description": "备选引擎",
                         "type": "string",
                         "options": [
-                            "",
-                            "ACRCloud官方",
-                            "讯飞ACRCloud（音乐识别）",
-                            "讯飞哼唱识别",
-                            "Shazam"
+                            "ACRCloud",
+                            "讯飞开放平台 ACRCloud",
+                            "讯飞开放平台",
+                            "Shazam",
+                            "无"
                         ],
                         "default": "Shazam",
-                        "hint": "前两档都失败时的兜底引擎。留空则跳过"
+                        "hint": "前两档都失败时的兜底引擎。选择「无」则跳过"
+                    }
+                }
+            },
+            "acrcloud": {
+                "description": "ACRCloud",
+                "type": "object",
+                "hint": "console.acrcloud.cn 注册获取；host 如 identify-cn-north-1.acrcloud.cn",
+                "items": {
+                    "host": {
+                        "description": "Host",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "access_key": {
+                        "description": "Access Key",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "access_secret": {
+                        "description": "Access Secret",
+                        "type": "string",
+                        "default": ""
                     }
                 }
             },
             "xfyun": {
-                "description": "讯飞 ACRCloud（音乐识别）凭据",
+                "description": "讯飞开放平台 ACRCloud",
                 "type": "object",
                 "hint": "原声识别（听歌识曲）。讯飞开放平台 console.xfyun.cn → 创建应用 → 语音扩展 → 歌曲识别 ACRCloud 页面获取（均为 32 位字符串）",
                 "items": {
@@ -86,9 +108,9 @@
                 }
             },
             "xfyun_humming": {
-                "description": "讯飞哼唱识别凭据",
+                "description": "讯飞开放平台",
                 "type": "object",
-                "hint": "旋律识别（哼唱猜歌）。同一应用开通歌曲识别（qbh）服务后获取；留空时自动复用上方讯飞 ACRCloud 凭据",
+                "hint": "旋律识别（哼唱猜歌）。同一应用开通歌曲识别（qbh）服务后获取；留空时自动复用上方讯飞开放平台 ACRCloud 凭据",
                 "items": {
                     "app_id": {
                         "description": "AppID（留空复用上方）",
@@ -97,28 +119,6 @@
                     },
                     "api_key": {
                         "description": "APIKey（留空复用上方）",
-                        "type": "string",
-                        "default": ""
-                    }
-                }
-            },
-            "acrcloud": {
-                "description": "ACRCloud 官方凭据",
-                "type": "object",
-                "hint": "console.acrcloud.cn 注册获取；host 如 identify-cn-north-1.acrcloud.cn",
-                "items": {
-                    "host": {
-                        "description": "识别服务主机",
-                        "type": "string",
-                        "default": ""
-                    },
-                    "access_key": {
-                        "description": "Access Key",
-                        "type": "string",
-                        "default": ""
-                    },
-                    "access_secret": {
-                        "description": "Access Secret",
                         "type": "string",
                         "default": ""
                     }

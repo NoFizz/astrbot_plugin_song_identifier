@@ -803,11 +803,11 @@ def build_engines(config: dict) -> SongIdentifier:
         ),
         "shazam": ShazamEngine(),
     }
-    # 配置下拉选项（中文标签）→ 引擎标识
+    # 配置下拉选项（中文标签）→ 引擎标识；"无"或未知标签视为留空跳过
     label_to_key = {
-        "ACRCloud官方": "acrcloud",
-        "讯飞ACRCloud（音乐识别）": "xfyun",
-        "讯飞哼唱识别": "xfyun_humming",
+        "ACRCloud": "acrcloud",
+        "讯飞开放平台 ACRCloud": "xfyun",
+        "讯飞开放平台": "xfyun_humming",
         "Shazam": "shazam",
     }
 

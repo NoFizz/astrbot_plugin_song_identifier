@@ -89,8 +89,8 @@ def make_plugin(identifier_result=None):
         },
         "engines": {
             "select": {
-                "primary": "ACRCloud官方",
-                "secondary": "讯飞ACRCloud（音乐识别）",
+                "primary": "ACRCloud",
+                "secondary": "讯飞开放平台 ACRCloud",
                 "fallback": "Shazam",
             },
             "xfyun": {"app_id": "A", "api_key": "K", "api_secret": "S"},
@@ -447,4 +447,5 @@ async def test_pipeline_text_mode_link_disabled(monkeypatch):
     assert len(ev.sent) == 1
     assert "晴天" in ev.sent[0]["text"]
     assert "🔗" not in ev.sent[0]["text"]
+
 

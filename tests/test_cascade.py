@@ -76,8 +76,8 @@ def make_engines_config(primary="", secondary="", fallback=""):
 def test_build_engines_order():
     identifier = build_engines(
         make_engines_config(
-            primary="ACRCloud官方",
-            secondary="讯飞ACRCloud（音乐识别）",
+            primary="ACRCloud",
+            secondary="讯飞开放平台 ACRCloud",
             fallback="Shazam",
         )
     )
@@ -89,7 +89,7 @@ def test_build_engines_order():
 
 def test_build_engines_skips_empty_slots():
     """空档位跳过：只配置首选，则引擎链只有首选。"""
-    identifier = build_engines(make_engines_config(primary="ACRCloud官方"))
+    identifier = build_engines(make_engines_config(primary="ACRCloud"))
     names = [type(e).__name__ for e in identifier.engines]
     assert names == ["AcrcloudEngine"]
 
@@ -108,7 +108,7 @@ def test_build_engines_unknown_label_skipped():
 
 def test_build_engines_humming_slot_uses_xfyun_humming_keys():
     """选中讯飞哼唱识别档位时，哼唱引擎复用讯飞 ACRCloud 凭据。"""
-    config = make_engines_config(primary="讯飞哼唱识别")
+    config = make_engines_config(primary="讯飞开放平台")
     identifier = build_engines(config)
     engines = identifier.engines
     assert len(engines) == 1
@@ -130,3 +130,4 @@ async def test_cascade_with_real_shazam_engine(monkeypatch):
     assert info.title == "T"
     assert info.artist == "A"
     assert info.source == "shazam"
+

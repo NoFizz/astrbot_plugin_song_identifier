@@ -17,8 +17,11 @@ import aiohttp
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 
+from astrbot.api import message_components as Comp
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At, File, Record, Reply, Video
 from astrbot.api.star import Context, Star, register
+from astrbot.core.star.filter.event_message_type import EventMessageType
 
 
 def _load_cjk_font(size: int = 20):
@@ -44,15 +47,6 @@ def _load_cjk_font(size: int = 20):
             except Exception:
                 continue
     return ImageFont.load_default()
-
-
-@register(
-    "astrbot_plugin_song_identifier", "NoFizz", "引用语音/视频消息识曲插件", "1.0.0"
-)
-class SongIdentifierPlugin(Star):
-    def __init__(self, context: Context, config: dict):
-        super().__init__(context)
-        self.config = config
 
 
 @dataclass
@@ -754,3 +748,145 @@ class ResultFormatter:
                 }
             ],
         }
+
+
+@register(
+    "astrbot_plugin_song_identifier",
+    "NoFizz",
+    "引用语音/视频消息识曲插件（讯飞/ACRCloud/Shazam）",
+    "1.0.0",
+)
+class SongIdentifierPlugin(Star):
+    """识别 QQ 群/私聊中引用语音/视频/音频文件消息的歌曲。"""
+
+    def __init__(self, context: Context, config: dict):
+        """构造插件，装配触发检测、媒体落地、识别引擎链、增强与格式化器。
+
+        Args:
+            context: AstrBot Star 上下文。
+            config: 插件配置 dict。
+        """
+        super().__init__(context)
+        self.config = config
+        self.detector = TriggerDetector(
+            config.get("trigger_keyword", "识曲"),
+            config.get("humming_keyword", "哼唱"),
+        )
+        self.materializer = MediaMaterializer()
+        self.identifier, self.humming_engine = build_engines(config)
+        self.enricher = SongEnricher(platform="qq")
+        self.formatter = ResultFormatter(config)
+
+    @filter.event_message_type(EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        """处理所有消息事件：识别触发词与引用媒体，编排识别流程并发送结果。
+
+        Args:
+            event: 消息事件。
+        """
+        mode = self.detector.check(event)
+        if mode is None:
+            return
+
+        media = MediaExtractor.extract_media(event)
+        if media is None:
+            await event.send(event.plain_result("请引用包含语音或视频的消息后再试。"))
+            event.stop_event()
+            return
+
+        try:
+            audio_path = await self.materializer.materialize(media)
+            if not audio_path or not os.path.exists(audio_path):
+                await event.send(event.plain_result("媒体文件获取失败，请重试。"))
+                event.stop_event()
+                return
+
+            timeout = aiohttp.ClientTimeout(
+                total=float(self.config.get("identify_timeout", 30))
+            )
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if mode == "humming":
+                    song = await self.humming_engine.identify(audio_path, session)
+                else:
+                    song = await self.identifier.identify(audio_path, session)
+
+            if song is None:
+                hint = (
+                    "未能识别出歌曲，请确认音频清晰且时长足够（建议 15 秒以上）。"
+                    if mode == "music"
+                    else "未能识别出哼唱的歌曲，请再唱得清晰一些。"
+                )
+                await event.send(event.plain_result(hint))
+                event.stop_event()
+                return
+
+            song = await self.enricher.enrich(song)
+            await self._send_result(event, song)
+        except asyncio.TimeoutError:
+            await event.send(event.plain_result("识别超时，请稍后重试。"))
+        except Exception as e:
+            await event.send(event.plain_result(f"识曲出错：{e}"))
+        finally:
+            event.stop_event()
+
+    async def _send_result(self, event: AstrMessageEvent, song: SongInfo):
+        """按 output_format 配置发送识别结果：card/image/text。
+
+        Args:
+            event: 消息事件。
+            song: 识别到的歌曲信息。
+        """
+        fmt = self.config.get("output_format", "text")
+        if fmt == "card":
+            ok = await self._try_send_card(event, song)
+            if ok:
+                return
+        if fmt == "image":
+            image_bytes = await self.formatter.build_image(song)
+            if image_bytes:
+                await event.send(
+                    event.chain_result([Comp.Image.fromBytes(image_bytes)])
+                )
+                return
+        await event.send(event.plain_result(self.formatter.format_text(song)))
+
+    async def _try_send_card(self, event: AstrMessageEvent, song: SongInfo) -> bool:
+        """尝试发送 QQ 音乐卡片；不支持时返回 False 降级。
+
+        Args:
+            event: 消息事件。
+            song: 识别到的歌曲信息。
+
+        Returns:
+            True 表示卡片发送成功；不支持或发送失败时返回 False。
+        """
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            return False
+        try:
+            if event.is_private_chat():
+                payload = {
+                    "user_id": event.get_sender_id(),
+                    "message": [
+                        {
+                            "type": "music",
+                            "data": {
+                                "type": "custom",
+                                "url": song.audio_url or "",
+                                "audio": song.audio_url or "",
+                                "title": song.title or "",
+                                "image": song.cover_url or "",
+                                "singer": song.artist or "",
+                            },
+                        }
+                    ],
+                }
+                await bot.api.call_action("send_private_msg", **payload)
+            else:
+                await bot.api.call_action(
+                    "send_group_msg",
+                    **self.formatter.build_card_payload(song, event.get_group_id()),
+                )
+            return True
+        except Exception:
+            return False

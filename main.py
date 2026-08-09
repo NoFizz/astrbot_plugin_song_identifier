@@ -178,6 +178,8 @@ def parse_acrcloud_response(payload: dict) -> SongInfo | None:
     if not music:
         return None
     first = music[0]
+    if not first.get("title"):
+        return None
     artists = ", ".join(
         a.get("name", "") for a in (first.get("artists") or []) if a.get("name")
     )
@@ -206,9 +208,11 @@ class AcrcloudEngine:
             return None
         timestamp = str(int(time.time()))
         signature = build_acrcloud_signature(self.access_key, self.access_secret, timestamp)
+        with open(audio_path, "rb") as f:
+            sample = f.read()
         form = aiohttp.FormData()
         form.add_field("access_key", self.access_key)
-        form.add_field("sample", open(audio_path, "rb"),
+        form.add_field("sample", sample,
                        filename=Path(audio_path).name, content_type="application/octet-stream")
         form.add_field("sample_bytes", str(os.path.getsize(audio_path)))
         form.add_field("timestamp", timestamp)

@@ -390,3 +390,127 @@ class XfyunAcrEngine:
         if proc.returncode != 0 or not os.path.exists(mp3_path):
             return None
         return mp3_path
+
+
+def build_qbh_headers(app_id: str, api_key: str) -> dict:
+    """构造讯飞 qbh 哼唱识别请求头（官方算法）。
+
+    Args:
+        app_id: 讯飞开放平台应用 ID。
+        api_key: 讯飞开放平台 API Key。
+
+    Returns:
+        X-Appid/X-CurTime/X-Param/X-CheckSum 四个请求头组成的字典。
+    """
+    curtime = str(int(time.time()))
+    param = {"aue": "raw", "sample_rate": "16000"}
+    x_param = base64.b64encode(json.dumps(param).encode()).decode()
+    checksum = hashlib.md5((api_key + curtime + x_param).encode()).hexdigest()
+    return {
+        "X-Appid": app_id,
+        "X-CurTime": curtime,
+        "X-Param": x_param,
+        "X-CheckSum": checksum,
+    }
+
+
+def parse_qbh_response(payload: dict) -> SongInfo | None:
+    """解析讯飞 qbh 哼唱识别响应。
+
+    Args:
+        payload: 讯飞 qbh 接口返回的 JSON 响应。
+
+    Returns:
+        命中时返回第一条歌曲的 SongInfo；错误码或空 data 时返回 None。
+    """
+    if str(payload.get("code")) != "0":
+        return None
+    data = payload.get("data") or []
+    if not data:
+        return None
+    first = data[0]
+    return SongInfo(
+        title=first.get("song"),
+        artist=first.get("singer") or None,
+        song_id=str(first.get("song_id") or "") or None,
+        source="xfyun_humming",
+    )
+
+
+class XfyunHummingEngine:
+    """讯飞 qbh 哼唱识别引擎（哼唱旋律识别）。"""
+
+    DEFAULT_URL = "https://webqbh.xfyun.cn/v1/service/v1/qbh"
+
+    def __init__(self, app_id: str, api_key: str):
+        self.app_id = app_id
+        self.api_key = api_key
+        self.url = self.DEFAULT_URL
+
+    def is_configured(self) -> bool:
+        return bool(self.app_id and self.api_key)
+
+    async def identify(self, audio_path: str, session) -> SongInfo | None:
+        """哼唱音频识别：先重采样为 16k 单声道 wav，再上传讯飞 qbh 接口。
+
+        Args:
+            audio_path: 本地音频文件路径。
+            session: aiohttp ClientSession。
+
+        Returns:
+            命中时返回 SongInfo；未配置、文件不存在或转换失败时返回 None。
+        """
+        if not self.is_configured() or not os.path.exists(audio_path):
+            return None
+        wav_path = await self._to_16k_wav(audio_path)
+        if not wav_path:
+            return None
+        try:
+            headers = build_qbh_headers(self.app_id, self.api_key)
+            with open(wav_path, "rb") as f:
+                audio_bytes = f.read()
+            async with session.post(
+                self.url, data=audio_bytes, headers=headers
+            ) as resp:
+                payload = await resp.json()
+            return parse_qbh_response(payload)
+        finally:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+
+    async def _to_16k_wav(self, wav_path: str) -> str | None:
+        """重采样为 16k 单声道 16bit wav，供讯飞哼唱接口使用。
+
+        Args:
+            wav_path: 输入音频文件路径。
+
+        Returns:
+            成功时返回临时 wav 路径（调用方负责清理）；失败时返回 None。
+        """
+        out_path = str(
+            Path(tempfile.gettempdir()) / f"qbh_{os.getpid()}_{uuid.uuid4().hex}.wav"
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i",
+                wav_path,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-sample_fmt",
+                "s16",
+                out_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError:
+            return None
+        await proc.wait()
+        if proc.returncode != 0 or not os.path.exists(out_path):
+            return None
+        return out_path

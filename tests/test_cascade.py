@@ -106,3 +106,18 @@ def test_build_engines_shazam_disabled():
     identifier, _ = build_engines(config)
     names = [type(e).__name__ for e in identifier.engines]
     assert names == ["XfyunAcrEngine"]
+
+
+@pytest.mark.asyncio
+async def test_cascade_with_real_shazam_engine(monkeypatch):
+    from shazamio import Shazam
+
+    async def fake_recognize(self, path, **kwargs):
+        return {"track": {"title": "T", "subtitle": "A"}}
+
+    monkeypatch.setattr(Shazam, "recognize", fake_recognize)
+    identifier = SongIdentifier(engines=[ShazamEngine()], timeout=10)
+    info = await identifier.identify("/tmp/fake.wav", None)
+    assert info.title == "T"
+    assert info.artist == "A"
+    assert info.source == "shazam"

@@ -241,6 +241,9 @@ class AcrcloudEngine:
 class ShazamEngine:
     """Shazam 备用识曲引擎（shazamio 非官方接口）。"""
 
+    def is_configured(self) -> bool:
+        return True
+
     async def identify(self, audio_path: str, session) -> SongInfo | None:
         try:
             from shazamio import Shazam
@@ -524,7 +527,7 @@ class SongIdentifier:
         self.timeout = timeout
 
     async def identify(self, audio_path: str, session) -> SongInfo | None:
-        async with asyncio.timeout(self.timeout):
+        async def _run() -> SongInfo | None:
             for engine in self.engines:
                 try:
                     if not engine.is_configured():
@@ -535,6 +538,8 @@ class SongIdentifier:
                 except Exception:
                     continue
             return None
+
+        return await asyncio.wait_for(_run(), timeout=self.timeout)
 
 
 def build_engines(config: dict) -> tuple[SongIdentifier, XfyunHummingEngine]:

@@ -620,7 +620,9 @@ class SongEnricher:
                 payload = resp.json()
         except Exception:
             return song
-        items = (payload or {}).get("data") or []
+        items = []
+        if isinstance(payload, dict):
+            items = payload.get("data") or []
         if not items:
             return song
         first = items[0]

@@ -122,7 +122,17 @@ def build_engines(config: dict) -> RecognitionCascade:
     return RecognitionCascade(engines=engines, timeout=timeout)
 
 
-def _cfg_float(config: dict, *keys, default: float) -> float:
+def _cfg_float(config: dict, *keys, default: float = 60.0) -> float:
+    """从嵌套配置读取浮点值，缺失或非法时返回 default。
+
+    Args:
+        config: 插件配置 dict。
+        *keys: 逐层键路径。
+        default: 缺失或非法时的默认值。
+
+    Returns:
+        解析后的浮点值。
+    """
     value = _cfg_str(config, *keys)
     if not value:
         return default

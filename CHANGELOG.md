@@ -24,6 +24,7 @@
 
 - 移除已弃用的 `@register` 装饰器（AstrBot v3.5.19 后自动识别 Star 类）。
 - 删除旧版 1475 行单文件 `main.py` 中的重复实现与旧版测试（行为契约已迁移至新模块测试）。
+- **配置破坏性变更**：`engines.xfyun_humming` 凭据块已合并进 `engines.xfyun`（三类讯飞引擎共用一组凭据）。升级后请在 WebUI 插件配置中重新保存一次（AstrBot 会自动按新 schema 重建配置）。
 
 ### Security
 

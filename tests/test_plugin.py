@@ -113,6 +113,37 @@ def _record_event():
     return _Event(messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲")
 
 
+def test_plugin_instantiates_with_config_dict():
+    """AstrBot 以 __init__(context, config) 实例化插件。
+
+    AstrBot 用 TypeError 探测构造函数是否接受 config：若 __init__ 内部
+    抛 TypeError 会被误判并二次调用失败（缺 config）。因此带 config 实例化
+    必须成功且不抛 TypeError。
+    """
+    from astrbot_plugin_song_identifier.main import SongIdentifierPlugin
+
+    class _FakeContext:
+        pass
+
+    config = {
+        "trigger": {"keyword": "识曲"},
+        "engines": {
+            "select": {"primary": "ACRCloud", "secondary": "留空", "fallback": "留空"},
+            "acrcloud": {"host": "", "access_key": "", "access_secret": ""},
+            "xfyun": {"app_id": "", "api_key": "", "api_secret": ""},
+        },
+        "output": {"format": "文本", "text_template": "{title} - {artist}"},
+        "advanced": {"identify_timeout": 60, "audio_max_seconds": 12},
+    }
+    # 模拟 star_manager.py 的调用路径：先带 config，成功即结束
+    plugin = SongIdentifierPlugin(context=_FakeContext(), config=config)
+
+    assert plugin.detector.keyword == "识曲"
+    assert plugin.materializer.max_seconds == 12
+    assert plugin.enricher is not None
+    assert plugin.formatter is not None
+
+
 @pytest.mark.asyncio
 async def test_on_message_full_success_text():
     plugin = _make_plugin()

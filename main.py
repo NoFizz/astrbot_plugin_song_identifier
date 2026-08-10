@@ -35,6 +35,10 @@ class SongIdentifierPlugin(Star):
             max_seconds=int(config.get("advanced", {}).get("audio_max_seconds", 12))
         )
         self.identifier = build_engines(config)
+        if not self.identifier.engines:
+            logger.warning(
+                "未配置任何识别引擎，请到插件配置中设置 首选/次选/备选 引擎。"
+            )
         self.enricher = SongEnricher()
         self.formatter = ResultFormatter(config)
         self._last_enriched = None

@@ -98,11 +98,15 @@ class ResultFormatter:
 
     async def build_image(self, enriched: EnrichedSong) -> bytes | None:
         """绘制音乐卡片图（封面 + 歌名 + 歌手），失败返回 None。"""
+        from . import log
+
         try:
             canvas = Image.new("RGB", (self.CARD_WIDTH, self.CARD_HEIGHT), "#1a1a2e")
             cover = None
             if enriched.cover_url:
+                log.debug(f"图片: 下载封面 {enriched.cover_url[:60]}")
                 cover = await self._load_cover(enriched.cover_url)
+                log.debug(f"图片: 封面加载{'成功' if cover else '失败'}")
             if cover is not None:
                 cover = cover.resize((self.THUMB_SIZE, self.THUMB_SIZE))
                 canvas.paste(cover, (0, 0))
@@ -125,18 +129,24 @@ class ResultFormatter:
                 )
             buffer = io.BytesIO()
             canvas.save(buffer, format="JPEG", quality=85)
+            log.debug(f"图片: 生成完成 {len(buffer.getvalue())} bytes")
             return buffer.getvalue()
-        except Exception:
+        except Exception as error:
+            log.warning(f"图片生成失败: {error}")
             return None
 
     async def _load_cover(self, url: str):
+        from . import log
+
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 url, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 if resp.status != 200:
+                    log.warning(f"图片: 封面 HTTP {resp.status}")
                     return None
                 data = await resp.read()
+                log.debug(f"图片: 封面下载完成 {len(data)} bytes")
         return Image.open(io.BytesIO(data)).convert("RGB")
 
 

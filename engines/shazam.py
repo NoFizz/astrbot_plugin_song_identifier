@@ -56,9 +56,12 @@ class ShazamEngine:
     async def identify(self, artifact, session=None, deadline=None) -> SongInfo | None:
         """Recognize an artifact using ShazamIO's current recognize API."""
 
+        from .. import log
+
         try:
             from shazamio import Shazam
 
+            log.debug(f"Shazam 开始识别: {artifact.path.name}")
             request = Shazam().recognize(str(artifact.path))
             if deadline is None:
                 payload = await request
@@ -94,4 +97,9 @@ class ShazamEngine:
                 type(error).__name__,
                 retryable=True,
             ) from error
-        return parse_shazam_response(payload)
+        song = parse_shazam_response(payload)
+        if song is not None:
+            log.debug(f"Shazam 识别成功: {song.title} - {song.artist or '未知'}")
+        else:
+            log.debug("Shazam 无识别结果（空 matches）")
+        return song

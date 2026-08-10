@@ -169,6 +169,8 @@ class XfyunAcrEngine:
     async def identify(self, artifact, session: aiohttp.ClientSession, deadline: float):
         """Send one-shot MP3 data to the selected Xfyun ACR route."""
 
+        from .. import log
+
         if not self.is_configured():
             raise RecognitionError(
                 ErrorKind.NOT_CONFIGURED,
@@ -180,6 +182,7 @@ class XfyunAcrEngine:
             raise RecognitionError(
                 ErrorKind.TIMEOUT, self.provider, self.mode, "deadline expired"
             )
+        log.debug(f"讯飞({self.mode}) 转换 MP3: {artifact.path.name}")
         mp3_path = await self._to_mp3(artifact.path)
         if mp3_path is None:
             raise RecognitionError(
@@ -191,6 +194,10 @@ class XfyunAcrEngine:
         try:
             audio = mp3_path.read_bytes()
             body = build_xfyun_request_body(self.app_id, self.mode, audio)
+            log.debug(
+                f"讯飞({self.mode}) 请求体: audio_base64={len(body['payload']['data']['audio'])} chars, "
+                f"encoding=lame"
+            )
             date = formatdate(usegmt=True)
             authorization = build_xfyun_authorization(
                 self.api_key, self.api_secret, self.host, self.path, date
@@ -207,6 +214,10 @@ class XfyunAcrEngine:
                     json=body,
                     timeout=aiohttp.ClientTimeout(total=timeout),
                 ) as response:
+                    text = await response.text()
+                    log.debug(
+                        f"讯飞({self.mode}) 响应: HTTP {response.status}, {len(text)} bytes"
+                    )
                     if response.status in {401, 403}:
                         raise RecognitionError(
                             ErrorKind.AUTH_FAILED,
@@ -241,7 +252,6 @@ class XfyunAcrEngine:
                             "unexpected HTTP response",
                             response.status,
                         )
-                    text = await response.text()
             except RecognitionError:
                 raise
             except (TimeoutError, aiohttp.ServerTimeoutError) as error:
@@ -265,7 +275,14 @@ class XfyunAcrEngine:
                     self.mode,
                     "response is not valid JSON",
                 ) from error
-            return decode_xfyun_response(payload, self.mode)
+            song = decode_xfyun_response(payload, self.mode)
+            if song is not None:
+                log.debug(
+                    f"讯飞({self.mode}) 识别成功: {song.title} - {song.artist or '未知'}"
+                )
+            else:
+                log.debug(f"讯飞({self.mode}) 无识别结果")
+            return song
         finally:
             mp3_path.unlink(missing_ok=True)
 

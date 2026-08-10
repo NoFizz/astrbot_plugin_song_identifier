@@ -128,6 +128,8 @@ class AcrcloudEngine:
     ) -> SongInfo | None:
         """Identify a normalized audio artifact."""
 
+        from .. import log
+
         if not self.is_configured():
             raise RecognitionError(
                 ErrorKind.NOT_CONFIGURED,
@@ -140,6 +142,7 @@ class AcrcloudEngine:
                 ErrorKind.TIMEOUT, self.provider, self.mode, "deadline expired"
             )
         sample = artifact.path.read_bytes()
+        log.debug(f"ACRCloud 构建请求: 音频 {len(sample)} bytes, host={self.host}")
         timestamp = str(int(time.time()))
         form = aiohttp.FormData()
         form.add_field("access_key", self.access_key)
@@ -166,6 +169,7 @@ class AcrcloudEngine:
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as response:
                 text = await response.text()
+                log.debug(f"ACRCloud 响应: HTTP {response.status}, {len(text)} bytes")
                 if response.status == 401 or response.status == 403:
                     raise RecognitionError(
                         ErrorKind.AUTH_FAILED,
@@ -226,4 +230,9 @@ class AcrcloudEngine:
                 self.mode,
                 "response is not valid JSON",
             ) from error
-        return parse_acrcloud_response(payload)
+        song = parse_acrcloud_response(payload)
+        if song is not None:
+            log.debug(f"ACRCloud 识别成功: {song.title} - {song.artist or '未知'}")
+        else:
+            log.debug("ACRCloud 无识别结果（1001 或空 metadata）")
+        return song

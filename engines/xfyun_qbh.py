@@ -85,6 +85,8 @@ class XfyunQbhEngine:
     async def identify(self, artifact, session: aiohttp.ClientSession, deadline: float):
         """Send raw normalized WAV bytes to the qbh humming endpoint."""
 
+        from .. import log
+
         if not self.is_configured():
             raise RecognitionError(
                 ErrorKind.NOT_CONFIGURED,
@@ -97,6 +99,7 @@ class XfyunQbhEngine:
                 ErrorKind.TIMEOUT, self.provider, self.mode, "deadline expired"
             )
         audio = artifact.path.read_bytes()
+        log.debug(f"qbh 构建请求: 音频 {len(audio)} bytes")
         if len(audio) > 2 * 1024 * 1024:
             raise RecognitionError(
                 ErrorKind.INPUT_INVALID,
@@ -112,6 +115,8 @@ class XfyunQbhEngine:
                 headers=build_qbh_headers(self.app_id, self.api_key),
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as response:
+                text = await response.text()
+                log.debug(f"qbh 响应: HTTP {response.status}, {len(text)} bytes")
                 if response.status in {401, 403}:
                     raise RecognitionError(
                         ErrorKind.AUTH_FAILED,
@@ -146,7 +151,6 @@ class XfyunQbhEngine:
                         "unexpected HTTP response",
                         response.status,
                     )
-                text = await response.text()
         except RecognitionError:
             raise
         except (TimeoutError, aiohttp.ServerTimeoutError) as error:
@@ -170,4 +174,9 @@ class XfyunQbhEngine:
                 self.mode,
                 "response is not valid JSON",
             ) from error
-        return parse_qbh_response(payload)
+        song = parse_qbh_response(payload)
+        if song is not None:
+            log.debug(f"qbh 识别成功: {song.title} - {song.artist or '未知'}")
+        else:
+            log.debug("qbh 无识别结果（空 data 或业务错误）")
+        return song

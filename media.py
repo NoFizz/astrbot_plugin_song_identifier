@@ -128,6 +128,8 @@ class MediaMaterializer:
 
         import asyncio
 
+        from . import log
+
         try:
             process = await asyncio.create_subprocess_exec(
                 "ffprobe",
@@ -143,6 +145,7 @@ class MediaMaterializer:
             )
             stdout, _ = await process.communicate()
             if process.returncode != 0:
+                log.warning(f"ffprobe 探测失败: returncode={process.returncode}")
                 return None
             duration, sample_rate, channels, sample_format = (
                 stdout.decode().splitlines()
@@ -154,22 +157,41 @@ class MediaMaterializer:
                 sample_format=sample_format,
                 size_bytes=path.stat().st_size,
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            log.warning(f"ffprobe 探测异常: {error}")
             return None
 
     async def _resolve_source(self, component) -> Path | None:
+        from . import log
+
         if isinstance(component, Record | Video):
-            path = await component.convert_to_file_path()
+            kind = "语音" if isinstance(component, Record) else "视频"
+            log.debug(f"解析{kind}来源: convert_to_file_path")
+            try:
+                path = await component.convert_to_file_path()
+            except Exception as error:
+                log.warning(f"{kind}下载/转码异常: {error}")
+                return None
         elif isinstance(component, File):
-            path = await component.get_file(allow_return_url=False)
+            log.debug("解析文件来源: get_file")
+            try:
+                path = await component.get_file(allow_return_url=False)
+            except Exception as error:
+                log.warning(f"文件下载异常: {error}")
+                return None
         else:
+            log.warning(f"不支持的媒体段类型: {type(component).__name__}")
             return None
         if not path or not Path(path).exists():
+            log.warning(f"媒体来源不存在: {path!r}")
             return None
+        log.debug(f"媒体来源就绪: {path}")
         return Path(path)
 
     async def _convert(self, source: Path, output: Path) -> MediaArtifact | None:
         import asyncio
+
+        from . import log
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -189,17 +211,20 @@ class MediaMaterializer:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-        except OSError:
+        except OSError as error:
+            log.warning(f"无法启动 ffmpeg: {error}")
             return None
 
         try:
             await process.wait()
         except asyncio.CancelledError:
+            log.warning("ffmpeg 转换被取消，清理输出")
             process.kill()
             await process.wait()
             output.unlink(missing_ok=True)
             raise
         if process.returncode != 0 or not output.exists():
+            log.warning(f"ffmpeg 转换失败: returncode={process.returncode}")
             output.unlink(missing_ok=True)
             return None
         return MediaArtifact(path=output, created_paths=(output,))

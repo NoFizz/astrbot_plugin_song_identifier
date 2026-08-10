@@ -54,9 +54,12 @@ class SongEnricher:
     """
 
     async def enrich(self, song: SongInfo) -> EnrichedSong:
+        from . import log
+
         query = f"{song.title or ''} {song.artist or ''}".strip()
         if not query:
             return EnrichedSong(song=song)
+        log.debug(f"网易云增强: 查询 '{query}'")
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
@@ -68,9 +71,11 @@ class SongEnricher:
                 payload = resp.json()
                 songs = ((payload.get("result") or {}).get("songs")) or []
                 if not songs:
+                    log.debug("网易云增强: 无搜索结果")
                     return EnrichedSong(song=song)
                 first = songs[0]
                 song_id = str(first.get("id") or "")
+                log.debug(f"网易云增强: 命中 id={song_id}")
                 cover = None
                 if song_id:
                     cover = await self._fetch_cover(client, song_id)
@@ -79,11 +84,14 @@ class SongEnricher:
                     netease_id=song_id or None,
                     cover_url=cover or None,
                 )
-        except Exception:
+        except Exception as error:
             # 增强失败不阻塞识别核心：返回空增强
+            log.warning(f"网易云增强失败: {error}")
             return EnrichedSong(song=song)
 
     async def _fetch_cover(self, client, song_id: str) -> str | None:
+        from . import log
+
         try:
             resp = await client.get(
                 "https://music.163.com/api/song/detail/",
@@ -91,12 +99,17 @@ class SongEnricher:
                 headers=_NETEASE_HEADERS,
             )
             if resp.status_code != 200:
+                log.debug(f"网易云封面: HTTP {resp.status_code}")
                 return None
             payload = resp.json()
             detail_songs = payload.get("songs") or []
             if not detail_songs:
+                log.debug("网易云封面: 详情无数据")
                 return None
             album = detail_songs[0].get("album") or {}
-            return album.get("picUrl")
-        except Exception:
+            pic = album.get("picUrl")
+            log.debug(f"网易云封面: {'有' if pic else '无'}")
+            return pic
+        except Exception as error:
+            log.warning(f"网易云封面获取失败: {error}")
             return None

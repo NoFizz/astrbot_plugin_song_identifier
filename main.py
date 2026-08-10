@@ -5,28 +5,15 @@
 具体逻辑分布在 media / engines / recognition / enrichment / output。
 """
 
-from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
+from . import log
 from .enrichment import SongEnricher
 from .media import MediaExtractor, MediaMaterializer, TriggerDetector
 from .output import PLATFORM_PROVIDERS, ResultFormatter
 from .recognition import RecognitionOutcome, build_engines
-
-# 详细日志开关：由插件配置 advanced.debug_log 控制（Star 初始化时设置）
-_DEBUG_LOG = False
-
-
-def _log_debug(msg: str) -> None:
-    """输出详细分步日志；仅当插件配置开启 debug_log 时生效。
-
-    Args:
-        msg: 日志内容。
-    """
-    if _DEBUG_LOG:
-        logger.info(msg)
 
 
 class SongIdentifierPlugin(Star):
@@ -41,8 +28,7 @@ class SongIdentifierPlugin(Star):
         """
         super().__init__(context)
         self.config = config
-        global _DEBUG_LOG
-        _DEBUG_LOG = bool(config.get("advanced", {}).get("debug_log", False))
+        log.set_debug(bool(config.get("advanced", {}).get("debug_log", False)))
         self.detector = TriggerDetector(
             str(config.get("trigger", {}).get("keyword", "识曲") or "识曲")
         )
@@ -51,9 +37,7 @@ class SongIdentifierPlugin(Star):
         )
         self.identifier = build_engines(config)
         if not self.identifier.engines:
-            logger.warning(
-                "未配置任何识别引擎，请到插件配置中设置 首选/次选/备选 引擎。"
-            )
+            log.warning("未配置任何识别引擎，请到插件配置中设置 首选/次选/备选 引擎。")
         self.enricher = SongEnricher()
         self.formatter = ResultFormatter(config)
         self._last_enriched = None
@@ -63,28 +47,43 @@ class SongIdentifierPlugin(Star):
         """处理所有消息事件：触发检测、识别流程与结果发送。"""
         if not self.detector.check(event):
             return
-        logger.info("开始识曲")
+        log.info("开始识曲")
+        log.debug(
+            f"触发检测命中: 群聊={not event.is_private_chat()}, "
+            f"发送者={event.get_sender_id()}, 关键词={self.detector.keyword!r}"
+        )
 
         media = MediaExtractor.extract_media(event)
         if media is None:
+            log.debug("引用消息中无媒体段，提示用户")
             await event.send(event.plain_result("请引用包含语音或视频的消息后再试。"))
             event.stop_event()
             return
+        log.debug(f"媒体段类型: {type(media).__name__}")
 
         try:
             outcome, materialize_ok = await self._identify(media)
             if not materialize_ok:
+                log.warning("媒体落地失败，提示用户")
                 await event.send(event.plain_result("媒体文件获取失败，请重试。"))
             elif outcome.timed_out:
+                log.warning("识别超时，提示用户")
                 await event.send(event.plain_result("识别超时，请稍后重试。"))
             elif outcome.song is None:
+                log.warning("识别无结果，提示用户")
                 await event.send(
                     event.plain_result("未能识别出歌曲，请确认音频清晰且时长足够。")
                 )
             else:
                 await self._send_result(event, outcome)
+                log.info(
+                    "识曲完成: %s - %s (provider=%s)",
+                    outcome.song.title,
+                    outcome.song.artist or "未知歌手",
+                    outcome.song.provider,
+                )
         except Exception as error:
-            logger.exception("识曲主流程异常: %s", error)
+            log.error("识曲主流程异常", exc=error)
             await event.send(event.plain_result(f"识曲出错：{error}"))
         finally:
             event.stop_event()
@@ -97,47 +96,46 @@ class SongIdentifierPlugin(Star):
         """
         import aiohttp
 
+        log.debug(f"开始处理媒体（截取前 {self.materializer.max_seconds} 秒）")
         artifact = await self.materializer.materialize(media)
         if artifact is None:
-            logger.warning("媒体落地失败（无本地音频文件）")
+            log.warning("媒体落地失败（无本地音频文件）")
             return RecognitionOutcome(song=None), False
         try:
             try:
                 size = artifact.path.stat().st_size
             except OSError:
                 size = 0
-            _log_debug(f"媒体已归一化: {artifact.path.name} ({size} bytes)")
+            log.debug(f"媒体归一化完成: {artifact.path.name} ({size} bytes)")
             timeout = aiohttp.ClientTimeout(
                 total=float(self.config.get("advanced", {}).get("identify_timeout", 60))
             )
+            log.debug(f"开始级联识别（超时 {timeout.total}s）")
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 outcome = await self.identifier.identify(artifact, session)
-            _log_debug(
-                f"识别结果: song={'有' if outcome.song else '无'}, "
+            log.debug(
+                f"级联识别结束: song={'有' if outcome.song else '无'}, "
                 f"timed_out={outcome.timed_out}, errors={len(outcome.errors)}"
             )
             # 识别失败/回退时输出各引擎失败原因（脱敏：不含密钥/响应正文）
             if outcome.song is None:
                 for error in outcome.errors:
-                    logger.warning(
-                        "引擎 %s/%s 识别失败: %s (kind=%s, code=%s)",
-                        error.provider,
-                        error.mode,
-                        error.message,
-                        error.kind.value,
-                        error.code,
+                    log.warning(
+                        f"引擎 {error.provider}/{error.mode} 识别失败: "
+                        f"{error.message} (kind={error.kind.value}, code={error.code})"
                     )
                 if not outcome.errors and not outcome.timed_out:
-                    logger.warning("所有引擎均未识别出歌曲（无结果）")
+                    log.warning("所有引擎均未识别出歌曲（无结果）")
             if outcome.song is not None:
+                log.debug(
+                    f"增强查询(网易云): {outcome.song.title} {outcome.song.artist}"
+                )
                 enriched = await self.enricher.enrich(outcome.song)
                 outcome.song = enriched.song
                 self._last_enriched = enriched
-                logger.info(
-                    "识别成功: %s - %s (provider=%s)",
-                    outcome.song.title,
-                    outcome.song.artist or "未知歌手",
-                    outcome.song.provider,
+                log.debug(
+                    f"增强结果: netease_id={enriched.netease_id or '无'}, "
+                    f"cover={bool(enriched.cover_url)}"
                 )
             return outcome, True
         finally:
@@ -155,9 +153,10 @@ class SongIdentifierPlugin(Star):
         Args:
             target(string): 要识别的媒体引用消息。传任意非空字符串即可，媒体自动从引用消息获取。
         """
-        _log_debug(f"LLM 工具被调用: target={target!r}")
+        log.debug(f"LLM 工具被调用: target={target!r}")
         media = MediaExtractor.extract_media(event)
         if media is None:
+            log.debug("LLM 工具: 无媒体段")
             yield event.plain_result(
                 "用户消息中没有可识别的媒体：需要引用（回复）一条包含"
                 "语音/视频/音频文件的消息。"
@@ -177,28 +176,32 @@ class SongIdentifierPlugin(Star):
         link = self.formatter.format_link(self._last_enriched)
         if link:
             text = f"{text}\n{link}"
+        log.debug(f"LLM 工具返回文本: {text[:80]}")
         yield event.plain_result(text)
 
     async def _send_result(self, event: AstrMessageEvent, outcome: RecognitionOutcome):
         """按配置输出识别结果：card / image / text。"""
         fmt = str(self.config.get("output", {}).get("format", "文本") or "文本").strip()
+        log.debug(f"输出格式: {fmt}")
         if fmt == "卡片":
             if await self._try_send_card(event):
+                log.debug("QQ 音乐卡片发送成功")
                 await self._send_link(event)
                 return
-            logger.warning("卡片发送失败，降级为文本")
+            log.warning("卡片发送失败，降级为文本")
         if fmt == "图片":
             image = await self.formatter.build_image(self._last_enriched)
             if image:
                 from astrbot.api import message_components as Comp
 
                 await event.send(event.chain_result([Comp.Image.fromBytes(image)]))
+                log.debug(f"图片卡片发送完成 ({len(image)} bytes)")
                 await self._send_link(event)
                 return
-            logger.warning("图片生成失败，降级为文本")
-        await event.send(
-            event.plain_result(self.formatter.format_text(self._last_enriched))
-        )
+            log.warning("图片生成失败，降级为文本")
+        text = self.formatter.format_text(self._last_enriched)
+        await event.send(event.plain_result(text))
+        log.debug(f"文本结果已发送: {text[:80]}")
         await self._send_link(event)
 
     async def _send_link(self, event: AstrMessageEvent):
@@ -208,6 +211,7 @@ class SongIdentifierPlugin(Star):
         link = self.formatter.format_link(self._last_enriched)
         if link:
             await event.send(event.plain_result(link))
+            log.debug(f"试听链接已发送: {link[:60]}")
 
     async def _try_send_card(self, event: AstrMessageEvent) -> bool:
         """按配置卡片平台顺序尝试发送，全部失败返回 False。"""
@@ -240,5 +244,5 @@ class SongIdentifierPlugin(Star):
                 )
                 return True
             except Exception as error:
-                logger.warning("卡片发送失败(%s): %s", label, error)
+                log.warning(f"卡片发送失败({label}): {error}")
         return False

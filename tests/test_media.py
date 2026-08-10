@@ -73,6 +73,10 @@ async def test_materializer_passes_duration_and_audio_shape_to_ffmpeg(
             output = Path(calls[-1][-1])
             output.write_bytes(b"wav")
 
+        async def communicate(self):
+            # ffprobe 输出: duration / sample_rate / channels / sample_fmt
+            return b"12.0\n16000\n1\ns16\n", b""
+
     async def fake_create_process(*args, **kwargs):
         calls.append(args)
         return FakeProcess()

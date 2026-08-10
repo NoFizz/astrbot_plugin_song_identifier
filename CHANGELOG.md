@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 统一插件日志系统：所有日志带 `[听歌识曲]` 前缀；`debug_log` 开关集中管理，媒体转换、引擎尝试、识别结果、输出形式等全步骤均有详细日志。
+- 级联识别日志：输出每个引擎的尝试过程（正在使用哪个引擎/返回什么结果/无结果/错误/超时）。
+
 ### Fixed
 
 - 修复自然语言触发失效：`identify_song` 工具新增必需参数 `target`。AstrBot skills_like 两阶段工具模式下，阶段2 只下发 name + parameters（描述被剥掉），无参数工具在阶段2 参数为空、LLM 无法确认调用。增加 `target(string)` 参数后阶段2 有参数 schema 可看，LLM 可正常调用。

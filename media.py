@@ -97,12 +97,31 @@ class MediaMaterializer:
     async def materialize(self, component) -> MediaArtifact | None:
         """Convert a message component to a short mono WAV artifact."""
 
+        from . import log
+
         source = await self._resolve_source(component)
         if source is None:
+            log.warning("媒体来源解析失败（下载/转码不可用）")
             return None
+        log.debug(
+            f"开始转换格式: {source.name} → 16kHz 单声道 wav (截取 {self.max_seconds}s)"
+        )
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         output = self.temp_dir / f"songid_{os.getpid()}_{os.urandom(8).hex()}.wav"
-        return await self._convert(source, output)
+        artifact = await self._convert(source, output)
+        if artifact is None:
+            log.warning("ffmpeg 转换失败")
+            return None
+        metadata = await self.probe(output)
+        if metadata:
+            log.debug(
+                f"转换完成: {artifact.path.name} {metadata.duration:.1f}s, "
+                f"{metadata.sample_rate}Hz, {metadata.channels}ch, "
+                f"{metadata.size_bytes} bytes"
+            )
+        else:
+            log.debug(f"转换完成: {artifact.path.name}（时长未知）")
+        return artifact
 
     async def probe(self, path: Path) -> MediaMetadata | None:
         """Read normalized audio metadata using ffprobe."""

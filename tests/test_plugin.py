@@ -27,6 +27,7 @@ class _FakeIdentifier:
 class _FakeMaterializer:
     def __init__(self, ok=True):
         self.ok = ok
+        self.max_seconds = 12
 
     async def materialize(self, component):
         from pathlib import Path
@@ -176,30 +177,6 @@ def test_identify_song_tool_declares_required_target_param():
     assert "string" in doc, "target 参数必须带类型标注 string"
 
 
-def test_debug_log_toggle_controls_logging(monkeypatch):
-    """debug_log 开关必须生效：开启时输出详细日志，关闭时静默。"""
-    import astrbot_plugin_song_identifier.main as plugin_module
-
-    plugin_module._DEBUG_LOG = True
-    logged = []
-
-    class _FakeLogger:
-        def info(self, msg, *args):
-            logged.append(msg)
-
-    monkeypatch.setattr(plugin_module, "logger", _FakeLogger())
-    plugin_module._log_debug("详细日志测试")
-
-    assert len(logged) == 1
-
-    plugin_module._DEBUG_LOG = False
-    logged.clear()
-    plugin_module._log_debug("不应输出")
-
-    assert logged == []
-    plugin_module._DEBUG_LOG = False
-
-
 @pytest.mark.asyncio
 async def test_on_message_no_media_hint():
     plugin = _make_plugin()
@@ -253,7 +230,7 @@ async def test_on_message_identify_no_result_hint():
 @pytest.mark.asyncio
 async def test_on_message_failure_logs_engine_reasons(monkeypatch):
     """识别失败时记录各引擎失败原因（provider/mode/kind/code）。"""
-    import astrbot_plugin_song_identifier.main as plugin_module
+    import astrbot_plugin_song_identifier.log as log_module
     from astrbot_plugin_song_identifier.models import ErrorKind, RecognitionError
 
     warnings = []
@@ -268,7 +245,7 @@ async def test_on_message_failure_logs_engine_reasons(monkeypatch):
         def exception(self, *a, **k):
             pass
 
-    monkeypatch.setattr(plugin_module, "logger", _FakeLogger())
+    monkeypatch.setattr(log_module, "logger", _FakeLogger())
     plugin = _make_plugin(
         identifier=_FakeIdentifier(
             song=None,

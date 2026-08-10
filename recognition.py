@@ -29,16 +29,23 @@ class RecognitionCascade:
         self.timeout = max(0.1, float(timeout))
 
     async def identify(self, artifact, session) -> RecognitionOutcome:
+        from . import log
+
         deadline = time.monotonic() + self.timeout
         errors: list[RecognitionError] = []
         timed_out = False
         try:
             for engine in self.engines:
+                provider = getattr(engine, "provider", type(engine).__name__)
+                mode = getattr(engine, "mode", "")
                 if not engine.is_configured():
+                    log.debug(f"引擎 {provider} 未配置，跳过")
                     continue
                 if time.monotonic() >= deadline:
                     timed_out = True
+                    log.warning("级联超时，停止尝试后续引擎")
                     break
+                log.debug(f"正在使用引擎: {provider} ({mode})")
                 try:
                     remaining = max(0.001, deadline - time.monotonic())
                     song = await asyncio.wait_for(
@@ -46,18 +53,25 @@ class RecognitionCascade:
                     )
                 except (asyncio.TimeoutError, TimeoutError):
                     timed_out = True
-                    engine_name = type(engine).__name__
                     errors.append(
-                        RecognitionError(
-                            ErrorKind.TIMEOUT, engine_name, engine.mode, "识别超时"
-                        )
+                        RecognitionError(ErrorKind.TIMEOUT, provider, mode, "识别超时")
                     )
+                    log.warning(f"引擎 {provider} 超时")
                     break
                 except RecognitionError as error:
                     errors.append(error)
+                    log.warning(
+                        f"引擎 {provider} 返回错误: {error.message} "
+                        f"(kind={error.kind.value}, code={error.code})"
+                    )
                     continue
                 if song is not None:
+                    log.debug(
+                        f"引擎 {provider} 识别成功: {song.title} - "
+                        f"{song.artist or '未知歌手'}"
+                    )
                     return RecognitionOutcome(song=song, errors=tuple(errors))
+                log.debug(f"引擎 {provider} 无结果，尝试下一引擎")
         except asyncio.CancelledError:
             raise
         return RecognitionOutcome(song=None, errors=tuple(errors), timed_out=timed_out)

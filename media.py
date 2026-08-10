@@ -84,15 +84,25 @@ except ImportError:  # pragma: no cover - exercised only with minimal test stubs
 
 @dataclass(slots=True)
 class MediaArtifact:
-    """A normalized media file and the files created by the plugin."""
+    """归一化媒体文件及本请求创建的全部临时文件。
+
+    Attributes:
+        path: 归一化后的 WAV 文件路径。
+        created_paths: 插件创建的 WAV 等输出文件。
+        source_temp_paths: 本请求下载/转换的临时源文件（AstrBot temp 目录内），
+            识别结束一并清理；不属于插件的用户本地文件绝不删除。
+    """
 
     path: Path
     created_paths: tuple[Path, ...]
+    source_temp_paths: tuple[Path, ...] = ()
 
     async def cleanup(self) -> None:
-        """Remove plugin-created files without touching source media."""
+        """Remove plugin-created files without touching source media.
 
-        for path in self.created_paths:
+        删除归一化 WAV 与 AstrBot temp 内的临时源文件；用户本地原始文件不删。
+        """
+        for path in (*self.created_paths, *self.source_temp_paths):
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -168,7 +178,11 @@ class MediaMaterializer:
             )
         else:
             log.debug(f"转换完成: {artifact.path.name}（时长未知）")
-        return artifact
+        return MediaArtifact(
+            path=artifact.path,
+            created_paths=artifact.created_paths,
+            source_temp_paths=(source,) if self._is_temp_path(source) else (),
+        )
 
     async def probe(self, path: Path) -> MediaMetadata | None:
         """Read normalized audio metadata using ffprobe.
@@ -215,6 +229,20 @@ class MediaMaterializer:
         except (OSError, ValueError, asyncio.TimeoutError) as error:
             log.warning(f"ffprobe 探测异常: {error}")
             return None
+
+    def _is_temp_path(self, path: Path) -> bool:
+        """判断是否为 AstrBot temp 目录内由组件生成的下载/转换文件。
+
+        这类文件（media_audio_*/media_video_*/fileseg_*）位于 AstrBot data/temp，
+        识别结束后应清理；用户本地上传的原始文件不在 temp 目录，绝不删除。
+        """
+        try:
+            resolved = path.resolve()
+            relative = resolved.relative_to(Path(self.temp_dir).resolve())
+        except (OSError, ValueError):
+            return False
+        name = relative.name
+        return name.startswith(("media_audio_", "media_video_", "fileseg_"))
 
     async def _resolve_source(self, component) -> Path | None:
         from . import log

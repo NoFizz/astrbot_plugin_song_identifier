@@ -67,6 +67,39 @@ def test_materializer_clamps_max_seconds_to_12():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_removes_temp_source_but_not_user_file(tmp_path):
+    """识别结束清理 AstrBot temp 源文件，但绝不删除用户本地文件。"""
+    import asyncio
+
+    temp_dir = tmp_path / "temp"
+    temp_dir.mkdir()
+    user_file = tmp_path / "user_recording.amr"
+    user_file.write_bytes(b"user data")
+
+    temp_source = temp_dir / "media_audio_20260810_abc.wav"
+    temp_source.write_bytes(b"temp source")
+    normalized = temp_dir / "songid_test.wav"
+    normalized.write_bytes(b"wav")
+
+    materializer = MediaMaterializer(temp_dir=temp_dir)
+    artifact = MediaArtifact(
+        path=normalized,
+        created_paths=(normalized,),
+        source_temp_paths=(temp_source,),
+    )
+
+    # 手动验证 _is_temp_path 判定：temp 内临时文件 → True；用户文件 → False
+    assert materializer._is_temp_path(temp_source) is True
+    assert materializer._is_temp_path(user_file) is False
+
+    await artifact.cleanup()
+
+    assert not normalized.exists()
+    assert not temp_source.exists()
+    assert user_file.exists()  # 用户文件必须保留
+
+
+@pytest.mark.asyncio
 async def test_run_ffmpeg_timeout_terminates_process(monkeypatch):
     """run_ffmpeg 超时必须 terminate 并回收子进程，不遗留。"""
     import asyncio

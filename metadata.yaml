@@ -1,9 +1,9 @@
 name: astrbot_plugin_song_identifier
 display_name: 听歌识曲
-desc: 引用语音/视频消息识曲插件（ACRCloud/Shazam/讯飞多引擎，支持哼唱识别）
+desc: 多引擎精准音乐识别，支持QQ语音、音/视频文件识曲
 version: 1.0.0
 author: NoFizz
-repo: ""
+repo: https://github.com/NoFizz/astrbot_plugin_song_identifier
 support_platforms:
   - aiocqhttp
 license: "AGPL-3.0"

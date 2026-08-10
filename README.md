@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat" alt="license">
 </p>
 
-<p align="center">引用语音/视频消息识曲插件（讯飞/ACRCloud/Shazam 多引擎，支持哼唱识别）</p>
+<p align="center">多引擎精准音乐识别，支持QQ语音、音/视频文件识曲</p>
 
 <p align="center">
   <img src="https://count.getloli.com/@astrbot_plugin_song_identifier?theme=moebooru" alt="Moe Counter">
@@ -53,16 +53,16 @@
 
 打开 AstrBot WebUI → 插件管理 → 插件市场，搜索「听歌识曲」或 `astrbot_plugin_song_identifier`，点击安装并启用。
 
-**方式二：手动安装**
-
-将插件目录（或 clone 后的仓库）放入 AstrBot 的 `data/plugins/` 目录下：
+**方式二：GitHub 安装**
 
 ```bash
 cd <AstrBot 根目录>/data/plugins
-git clone <仓库地址> astrbot_plugin_song_identifier
+git clone https://github.com/NoFizz/astrbot_plugin_song_identifier.git
 ```
 
-然后在 AstrBot WebUI → 插件管理 → 重载插件。
+**方式三：手动安装**
+
+将插件目录直接放入 AstrBot 的 `data/plugins/` 目录下，然后在 AstrBot WebUI → 插件管理 → 重载插件。
 
 安装后请在插件配置面板中填写至少一个识别引擎的凭据（详见下文「识别引擎」）。
 

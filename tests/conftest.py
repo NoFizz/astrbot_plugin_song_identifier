@@ -48,6 +48,9 @@ def _install_astrbot_stubs() -> None:
         def custom_filter(self, *args, **kwargs):
             return lambda func: func
 
+        def llm_tool(self, *args, **kwargs):
+            return lambda func: func
+
         def event_message_type(self, *args, **kwargs):
             return lambda func: func
 

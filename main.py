@@ -1380,42 +1380,17 @@ class SongIdentifierPlugin(Star):
         _log_debug(f"[识曲] 媒体段类型: {type(media).__name__}")
 
         try:
-            audio_path = await self.materializer.materialize(media)
-            if not audio_path or not os.path.exists(audio_path):
-                logger.warning("[识曲] 媒体落地失败（无本地音频文件）")
-                await event.send(event.plain_result("媒体文件获取失败，请重试。"))
-                event.stop_event()
-                return
-            size = os.path.getsize(audio_path)
-            duration = await self.materializer._probe_duration(audio_path)
-            fmt = Path(audio_path).suffix.lstrip(".") or "?"
-            _log_debug(
-                f"[识曲] 音频就绪: 路径={audio_path}, 格式={fmt}, "
-                f"大小={size} bytes ({size / 1024:.1f} KB)"
-                + (f", 时长={duration:.1f}s" if duration is not None else ", 时长=未知")
-            )
-
-            timeout = aiohttp.ClientTimeout(
-                total=float(
-                    _cfg(self.config, "advanced", "identify_timeout", default=60)
-                )
-            )
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                song = await self.identifier.identify(audio_path, session)
-
-            if song is None:
+            song, materialize_ok = await self._run_identification(media)
+            if not materialize_ok:
+                hint = "媒体文件获取失败，请重试。"
+            elif song is None:
                 hint = "未能识别出歌曲，请确认音频清晰且时长足够（建议 15 秒以上）。"
-                logger.warning(f"[识曲] 识别失败: {hint}")
-                await event.send(event.plain_result(hint))
-                event.stop_event()
+            else:
+                await self._send_result(event, song)
                 return
-
-            logger.info(
-                f"[识曲] 识别成功: {song.title} - {song.artist or '未知歌手'} "
-                f"(source={song.source})"
-            )
-            song = await self.enricher.enrich(song)
-            await self._send_result(event, song)
+            logger.warning(f"[识曲] 识别失败: {hint}")
+            await event.send(event.plain_result(hint))
+            event.stop_event()
         except asyncio.TimeoutError:
             logger.warning("[识曲] 识别超时")
             await event.send(event.plain_result("识别超时，请稍后重试。"))
@@ -1424,6 +1399,75 @@ class SongIdentifierPlugin(Star):
             await event.send(event.plain_result(f"识曲出错：{e}"))
         finally:
             event.stop_event()
+
+    async def _run_identification(self, media) -> tuple[SongInfo | None, bool]:
+        """落地媒体并执行引擎识别与增强（监听器直连与 LLM 工具共用）。
+
+        Args:
+            media: 消息段（Record/Video/File）。
+
+        Returns:
+            (song, materialize_ok) 元组：song 为增强后的歌曲信息（识别失败
+            时为 None）；materialize_ok 为 False 表示媒体落地失败。
+        """
+        audio_path = await self.materializer.materialize(media)
+        if not audio_path or not os.path.exists(audio_path):
+            logger.warning("[识曲] 媒体落地失败（无本地音频文件）")
+            return None, False
+        size = os.path.getsize(audio_path)
+        duration = await self.materializer._probe_duration(audio_path)
+        fmt = Path(audio_path).suffix.lstrip(".") or "?"
+        _log_debug(
+            f"[识曲] 音频就绪: 路径={audio_path}, 格式={fmt}, "
+            f"大小={size} bytes ({size / 1024:.1f} KB)"
+            + (f", 时长={duration:.1f}s" if duration is not None else ", 时长=未知")
+        )
+        timeout = aiohttp.ClientTimeout(
+            total=float(_cfg(self.config, "advanced", "identify_timeout", default=60))
+        )
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            song = await self.identifier.identify(audio_path, session)
+        if song is None:
+            return None, True
+        song = await self.enricher.enrich(song)
+        logger.info(
+            f"[识曲] 识别成功: {song.title} - {song.artist or '未知歌手'} "
+            f"(source={song.source})"
+        )
+        return song, True
+
+    @filter.llm_tool(name="identify_song")
+    async def identify_song(self, event: AstrMessageEvent):
+        """识别语音/视频/音频文件中的歌曲。
+
+        当用户引用了（回复了）一条包含语音、视频或音频文件的消息，并询问
+        这是什么歌、歌名是什么、BGM 是什么时，调用此工具进行歌曲识别。
+        媒体文件自动从用户引用的消息中获取，无需额外参数。
+
+        Args:
+            无需参数。
+        """
+        media = MediaExtractor.extract_media(event)
+        if media is None:
+            yield event.plain_result(
+                "用户消息中没有可识别的媒体：需要引用（回复）一条包含"
+                "语音/视频/音频文件的消息。"
+            )
+            return
+        song, materialize_ok = await self._run_identification(media)
+        if not materialize_ok:
+            yield event.plain_result("媒体文件处理失败，请重试。")
+            return
+        if song is None:
+            yield event.plain_result(
+                "未能识别出歌曲，请确认音频清晰且时长足够（建议 15 秒以上）。"
+            )
+            return
+        text = self.formatter.format_text(song)
+        link = self.formatter.format_link(song)
+        if link:
+            text = f"{text}\n{link}"
+        yield event.plain_result(text)
 
     async def _send_result(self, event: AstrMessageEvent, song: SongInfo):
         """按 output_format 配置发送识别结果：card/image/text。

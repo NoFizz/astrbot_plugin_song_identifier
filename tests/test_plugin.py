@@ -239,7 +239,7 @@ async def test_on_message_failure_logs_engine_reasons(monkeypatch):
         def info(self, *a, **k):
             pass
 
-        def warning(self, msg, *args):
+        def warning(self, msg, *args, **kwargs):
             warnings.append(msg % args if args else msg)
 
         def exception(self, *a, **k):

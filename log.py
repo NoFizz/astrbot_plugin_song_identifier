@@ -25,12 +25,15 @@ def set_debug(enabled: bool) -> None:
 def debug(msg: str, *args) -> None:
     """输出详细分步日志；仅 debug_log 开启时生效。
 
+    stacklevel=3 让 AstrBot 日志来源指向业务调用者（main/media/engines）
+    而非本中转模块，便于按日志定位到具体业务代码行。
+
     Args:
         msg: 日志内容，支持 %s 占位符。
         *args: 格式化参数。
     """
     if _DEBUG_LOG:
-        logger.info(f"[{PLUGIN_NAME}] {msg}", *args)
+        logger.info(f"[{PLUGIN_NAME}] {msg}", *args, stacklevel=3)
 
 
 def info(msg: str, *args) -> None:
@@ -40,7 +43,7 @@ def info(msg: str, *args) -> None:
         msg: 日志内容，支持 %s 占位符。
         *args: 格式化参数。
     """
-    logger.info(f"[{PLUGIN_NAME}] {msg}", *args)
+    logger.info(f"[{PLUGIN_NAME}] {msg}", *args, stacklevel=3)
 
 
 def warning(msg: str, *args) -> None:
@@ -50,7 +53,7 @@ def warning(msg: str, *args) -> None:
         msg: 日志内容，支持 %s 占位符。
         *args: 格式化参数。
     """
-    logger.warning(f"[{PLUGIN_NAME}] {msg}", *args)
+    logger.warning(f"[{PLUGIN_NAME}] {msg}", *args, stacklevel=3)
 
 
 def error(msg: str, exc: BaseException | None = None) -> None:

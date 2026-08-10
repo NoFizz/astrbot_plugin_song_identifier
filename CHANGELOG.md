@@ -7,6 +7,7 @@
 ### Changed
 
 - 统一插件日志系统：所有日志带 `[听歌识曲]` 前缀；`debug_log` 开关集中管理，媒体转换、引擎尝试、识别结果、输出形式等全步骤均有详细日志。
+- 日志来源精确化：`log.debug/info/warning` 携带 `stacklevel`，AstrBot 日志来源从 `astrbot_plugin_song_identifier.log` 指向真实业务文件（`main`/`media`/`engines.acrcloud` 等），便于按日志定位到具体业务代码行。
 - 级联识别日志：输出每个引擎的尝试过程（正在使用哪个引擎/返回什么结果/无结果/错误/超时）。
 - 引擎级详细日志：四个引擎（ACRCloud/Shazam/讯飞 ACR/讯飞 qbh）均记录请求构建、上传大小、HTTP 状态、响应大小、解析成功/无结果/错误分类。
 - 媒体/增强/输出层日志补全：媒体来源分支（语音/视频/文件）、ffmpeg/ffprobe 成败、网易云查询/命中/封面、图片下载与生成、卡片构建。

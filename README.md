@@ -220,6 +220,10 @@ git clone https://github.com/NoFizz/astrbot_plugin_song_identifier.git
 
 不需要，零配置即用。它是免费的非官方接口，稳定性一般，定位为兜底引擎。
 
+**Q：`pip check` 报 aiofiles 版本冲突？**
+
+`shazamio 0.8.1` 声明 `aiofiles<24`，但 AstrBot 核心需要 `aiofiles 25.x`。该冲突是 shazamio 的过窄版本约束，实际代码只用到 `aiofiles.open()`（25.x 完全兼容），Shazam 引擎运行正常，**请勿降级 aiofiles**（会破坏 AstrBot/quart）。
+
 **Q：试听链接打不开？**
 
 链接来自网易云歌曲页（`music.163.com/song/{id}`），部分歌曲可能受版权限制无法在线播放，可在网易云客户端内搜索试听。

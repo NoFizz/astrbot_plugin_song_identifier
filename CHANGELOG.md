@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- 修复自然语言触发失效：`identify_song` 工具新增必需参数 `target`。AstrBot skills_like 两阶段工具模式下，阶段2 只下发 name + parameters（描述被剥掉），无参数工具在阶段2 参数为空、LLM 无法确认调用。增加 `target(string)` 参数后阶段2 有参数 schema 可看，LLM 可正常调用。
+- 修复 ffprobe 时长探测失败：改用带 key 的 `key=value` 输出并按 key 解析，不再依赖 ffprobe 字段输出顺序（实测 mp4 输出顺序不固定，导致 `float('s16')` 崩溃、时长永远显示未知）。
 - 恢复 `debug_log` 开关：重构时丢失了详细日志机制，现已在媒体归一化、识别结果、LLM 工具调用等关键步骤重新接入（受 `advanced.debug_log` 控制）。
 - 识别失败/引擎回退时输出各引擎失败原因（provider/mode/错误类型/错误码，脱敏），便于排查"为什么用了兜底引擎"。
 

@@ -106,7 +106,8 @@ async def test_probe_returns_audio_metadata(tmp_path, monkeypatch):
         returncode = 0
 
         async def communicate(self):
-            return b"12.0\n16000\n1\ns16\n", b""
+            # 真实 ffprobe 输出（带 key，顺序不固定）
+            return b"sample_fmt=s16\nsample_rate=16000\nchannels=1\nduration=12.000000\n", b""
 
     async def fake_create_process(*args, **kwargs):
         return FakeProcess()
@@ -119,4 +120,39 @@ async def test_probe_returns_audio_metadata(tmp_path, monkeypatch):
     assert metadata.duration == 12.0
     assert metadata.sample_rate == 16000
     assert metadata.channels == 1
+    assert metadata.sample_format == "s16"
+
+
+@pytest.mark.asyncio
+async def test_probe_tolerates_reordered_and_extra_lines(tmp_path, monkeypatch):
+    """ffprobe 输出顺序不固定（实测 mp4 流字段在前）：按 key 解析应稳定。"""
+    audio = tmp_path / "normalized.wav"
+    audio.write_bytes(b"wav")
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            # 乱序 + 重复字段（多流时 sample_rate 可能出现多次）
+            return (
+                b"fltp\n"  # 无 key 行（应忽略）
+                b"sample_rate=44100\n"
+                b"channels=2\n"
+                b"duration=80.363605\n"
+                b"sample_rate=16000\n"
+                b"sample_fmt=s16\n",
+                b"",
+            )
+
+    async def fake_create_process(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_process)
+
+    metadata = await MediaMaterializer(temp_dir=tmp_path).probe(audio)
+
+    assert metadata is not None
+    assert metadata.duration == 80.363605
+    assert metadata.sample_rate == 16000  # 取最后一个有效值
+    assert metadata.channels == 2
     assert metadata.sample_format == "s16"

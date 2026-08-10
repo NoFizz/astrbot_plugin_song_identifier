@@ -124,8 +124,11 @@ class MediaMaterializer:
         return artifact
 
     async def probe(self, path: Path) -> MediaMetadata | None:
-        """Read normalized audio metadata using ffprobe."""
+        """Read normalized audio metadata using ffprobe.
 
+        使用带 key 的输出（key=value 行），按 key 精确取值，
+        不依赖 ffprobe 的字段输出顺序（实测 mp4 输出顺序不固定）。
+        """
         import asyncio
 
         from . import log
@@ -138,7 +141,7 @@ class MediaMaterializer:
                 "-show_entries",
                 "format=duration:stream=sample_rate,channels,sample_fmt",
                 "-of",
-                "default=noprint_wrappers=1:nokey=1",
+                "default=noprint_wrappers=1",
                 str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -147,14 +150,21 @@ class MediaMaterializer:
             if process.returncode != 0:
                 log.warning(f"ffprobe 探测失败: returncode={process.returncode}")
                 return None
-            duration, sample_rate, channels, sample_format = (
-                stdout.decode().splitlines()
-            )
+            values: dict[str, str] = {}
+            for line in stdout.decode().splitlines():
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    # stream 段可能输出多条，取最后一个有效值
+                    if value:
+                        values[key.strip()] = value.strip()
+            if "duration" not in values:
+                log.warning("ffprobe 输出缺少 duration")
+                return None
             return MediaMetadata(
-                duration=float(duration),
-                sample_rate=int(sample_rate),
-                channels=int(channels),
-                sample_format=sample_format,
+                duration=float(values["duration"]),
+                sample_rate=int(values.get("sample_rate", 0) or 0),
+                channels=int(values.get("channels", 0) or 0),
+                sample_format=values.get("sample_fmt", ""),
                 size_bytes=path.stat().st_size,
             )
         except (OSError, ValueError) as error:

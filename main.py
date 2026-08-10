@@ -116,6 +116,19 @@ class SongIdentifierPlugin(Star):
                 f"识别结果: song={'有' if outcome.song else '无'}, "
                 f"timed_out={outcome.timed_out}, errors={len(outcome.errors)}"
             )
+            # 识别失败/回退时输出各引擎失败原因（脱敏：不含密钥/响应正文）
+            if outcome.song is None:
+                for error in outcome.errors:
+                    logger.warning(
+                        "引擎 %s/%s 识别失败: %s (kind=%s, code=%s)",
+                        error.provider,
+                        error.mode,
+                        error.message,
+                        error.kind.value,
+                        error.code,
+                    )
+                if not outcome.errors and not outcome.timed_out:
+                    logger.warning("所有引擎均未识别出歌曲（无结果）")
             if outcome.song is not None:
                 enriched = await self.enricher.enrich(outcome.song)
                 outcome.song = enriched.song

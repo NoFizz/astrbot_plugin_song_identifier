@@ -9,16 +9,19 @@ from astrbot_plugin_song_identifier.models import SongInfo
 
 
 class _FakeIdentifier:
-    def __init__(self, song=None, timed_out=False):
+    def __init__(self, song=None, timed_out=False, errors=()):
         self.song = song
         self.timed_out = timed_out
+        self.errors = errors
         self.calls = 0
 
     async def identify(self, artifact, session):
         self.calls += 1
         from astrbot_plugin_song_identifier.recognition import RecognitionOutcome
 
-        return RecognitionOutcome(song=self.song, errors=(), timed_out=self.timed_out)
+        return RecognitionOutcome(
+            song=self.song, errors=self.errors, timed_out=self.timed_out
+        )
 
 
 class _FakeMaterializer:
@@ -245,6 +248,46 @@ async def test_on_message_identify_no_result_hint():
 
     assert len(ev.sent) == 1
     assert "未能识别" in ev.sent[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_on_message_failure_logs_engine_reasons(monkeypatch):
+    """识别失败时记录各引擎失败原因（provider/mode/kind/code）。"""
+    import astrbot_plugin_song_identifier.main as plugin_module
+    from astrbot_plugin_song_identifier.models import ErrorKind, RecognitionError
+
+    warnings = []
+
+    class _FakeLogger:
+        def info(self, *a, **k):
+            pass
+
+        def warning(self, msg, *args):
+            warnings.append(msg % args if args else msg)
+
+        def exception(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(plugin_module, "logger", _FakeLogger())
+    plugin = _make_plugin(
+        identifier=_FakeIdentifier(
+            song=None,
+            errors=(
+                RecognitionError(
+                    ErrorKind.AUTH_FAILED, "acrcloud", "music", "bad key", 3014
+                ),
+            ),
+        )
+    )
+    ev = _record_event()
+
+    await plugin.on_message(ev)
+
+    joined = " ".join(warnings)
+    assert "acrcloud" in joined
+    assert "music" in joined
+    assert "AUTH_FAILED" in joined or "auth_failed" in joined
+    assert "3014" in joined
 
 
 @pytest.mark.asyncio

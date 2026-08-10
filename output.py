@@ -63,6 +63,7 @@ class ResultFormatter:
     CARD_HEIGHT = 576  # 压缩底部空白，封面占比升至 ~80%
     THUMB_SIZE = 440  # 封面尺寸：上方约占 3/4 区域
     COVER_MARGIN = 20  # 封面留白
+    SCALE = 2  # 超采样：内部按 2 倍分辨率渲染，提高图片清晰度
 
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -124,7 +125,7 @@ class ResultFormatter:
             canvas = self._render_card(enriched, cover)
 
             buffer = io.BytesIO()
-            canvas.save(buffer, format="JPEG", quality=92)
+            canvas.save(buffer, format="JPEG", quality=95)
             log.debug(f"图片: 生成完成 {len(buffer.getvalue())} bytes")
             return buffer.getvalue()
         except Exception as error:
@@ -136,12 +137,15 @@ class ResultFormatter:
     def _render_card(
         self, enriched: EnrichedSong, cover: Image.Image | None
     ) -> Image.Image:
-        W, H = self.CARD_WIDTH, self.CARD_HEIGHT
+        s = self.SCALE
+        W, H = self.CARD_WIDTH * s, self.CARD_HEIGHT * s
+        thumb_size = self.THUMB_SIZE * s
+        cover_margin = self.COVER_MARGIN * s
 
         # 1) 背景：封面放大模糊铺满；无封面时深色渐变兜底
         if cover is not None:
             bg = self._crop_fill(cover.copy(), W, H).filter(
-                ImageFilter.GaussianBlur(radius=30)
+                ImageFilter.GaussianBlur(radius=30 * s)
             )
             canvas = bg.convert("RGBA")
         else:
@@ -156,26 +160,26 @@ class ResultFormatter:
             od.line([(0, y), (W, y)], fill=(10, 10, 22, int(60 + 120 * y / H)))
         canvas = Image.alpha_composite(canvas, overlay)
 
-        cx = (W - self.THUMB_SIZE) // 2
-        cy = self.COVER_MARGIN
+        cx = (W - thumb_size) // 2
+        cy = cover_margin
 
         # 3) 封面：圆角 + 极柔和投影；无封面画占位块
         if cover is not None:
-            thumb = cover.convert("RGB").resize((self.THUMB_SIZE, self.THUMB_SIZE))
-            self._paste_cover(canvas, thumb, cx, cy, radius=24)
+            thumb = cover.convert("RGB").resize((thumb_size, thumb_size))
+            self._paste_cover(canvas, thumb, cx, cy, radius=24 * s)
         else:
             d0 = ImageDraw.Draw(canvas)
             d0.rounded_rectangle(
-                (cx, cy, cx + self.THUMB_SIZE, cy + self.THUMB_SIZE),
-                radius=24,
+                (cx, cy, cx + thumb_size, cy + thumb_size),
+                radius=24 * s,
                 fill=(255, 255, 255, 16),
             )
-            note_font = _load_cjk_font(96)
+            note_font = _load_cjk_font(96 * s)
             bbox = d0.textbbox((0, 0), "♪", font=note_font)
             d0.text(
                 (
-                    cx + (self.THUMB_SIZE - (bbox[2] - bbox[0])) / 2 - bbox[0],
-                    cy + (self.THUMB_SIZE - (bbox[3] - bbox[1])) / 2 - bbox[1],
+                    cx + (thumb_size - (bbox[2] - bbox[0])) / 2 - bbox[0],
+                    cy + (thumb_size - (bbox[3] - bbox[1])) / 2 - bbox[1],
                 ),
                 "♪",
                 fill=(255, 255, 255, 90),
@@ -184,10 +188,10 @@ class ResultFormatter:
 
         # 4) 底部文字区：歌名（较大）+ 歌手（较小），水平居中、垂直居中于剩余区域
         draw = ImageDraw.Draw(canvas)
-        font_title = _load_cjk_font(36, bold=True)
-        font_artist = _load_cjk_font(20)
+        font_title = _load_cjk_font(36 * s, bold=True)
+        font_artist = _load_cjk_font(20 * s)
 
-        max_w = W - 80
+        max_w = W - 80 * s
         title = self._fit_text(
             draw, enriched.song.title or "未知歌曲", font_title, max_w
         )
@@ -199,7 +203,7 @@ class ResultFormatter:
 
         tb = draw.textbbox((0, 0), title, font=font_title)
         title_h = tb[3] - tb[1]
-        gap = 12
+        gap = 12 * s
         if artist:
             ab = draw.textbbox((0, 0), artist, font=font_artist)
             artist_h = ab[3] - ab[1]
@@ -207,9 +211,9 @@ class ResultFormatter:
         else:
             total = title_h
 
-        area_top = cy + self.THUMB_SIZE
+        area_top = cy + thumb_size
         # -2：光学居中，避免小区域里文字显得偏下
-        top = area_top + (H - area_top - total) // 2 - 2
+        top = area_top + (H - area_top - total) // 2 - 2 * s
 
         title_w = draw.textlength(title, font=font_title)
         draw.text(
@@ -261,17 +265,23 @@ class ResultFormatter:
     def _paste_cover(
         canvas: Image.Image, thumb: Image.Image, x: int, y: int, radius: int
     ):
-        """圆角封面 + 极柔和投影（无描边）。"""
+        """圆角封面 + 极柔和投影（无描边）。
+
+        阴影尺寸随封面大小等比缩放，保证超采样下比例一致。
+        """
         s = thumb.size[0]
-        pad = 18
+        pad = max(6, s // 24)  # 原 440 → 18
+        blur = max(6, s // 27)  # 原 440 → 16
+        offset_x = max(2, s // 110)  # 原 440 → 4
+        offset_y = max(4, s // 55)  # 原 440 → 8
         shadow = Image.new("RGBA", (s + pad * 2, s + pad * 2), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
             (pad, pad, pad + s, pad + s),
             radius=radius,
             fill=(0, 0, 0, 80),
         )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(16))
-        canvas.alpha_composite(shadow, (x - pad + 4, y - pad + 8))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
+        canvas.alpha_composite(shadow, (x - pad + offset_x, y - pad + offset_y))
         mask = Image.new("L", (s, s), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
             (0, 0, s - 1, s - 1), radius=radius, fill=255

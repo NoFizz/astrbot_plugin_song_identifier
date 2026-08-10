@@ -25,6 +25,22 @@ from astrbot.api.message_components import At, File, Record, Reply, Video
 from astrbot.api.star import Context, Star, register
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
+# 详细日志开关：由插件配置 advanced.debug_log 控制（Star 初始化时设置）
+_DEBUG_LOG = False
+
+
+def _log_debug(msg: str) -> None:
+    """输出详细分步日志；仅当插件配置开启 debug_log 时生效。
+
+    用于区分两类日志：基础日志（logger.info/warning 直接调用，始终输出）
+    与详细日志（本函数，调试用）。关闭时只保留开始识曲/成功/失败等基础日志。
+
+    Args:
+        msg: 日志内容。
+    """
+    if _DEBUG_LOG:
+        logger.info(msg)
+
 
 def _load_cjk_font(size: int = 20):
     """加载系统中文字体，失败时回退 Pillow 默认字体。
@@ -166,12 +182,12 @@ class MediaMaterializer:
             src = (
                 f"file={component.file!r}, url={component.url!r}, path={component.path!r}"
             )
-            logger.info(f"[识曲] 语音段属性: {src}")
+            _log_debug(f"[识曲] 语音段属性: {src}")
             path = await component.convert_to_file_path()
             if not path:
                 logger.warning("[识曲] 语音下载/转码失败")
                 return None
-            logger.info(
+            _log_debug(
                 f"[识曲] 语音转码完成: {path}, 截取前 {self.max_seconds}s"
             )
             return await self._normalize_to_wav(path, "语音")
@@ -181,13 +197,13 @@ class MediaMaterializer:
                 logger.warning("[识曲] 视频下载失败（convert_to_file_path 返回空）")
                 return None
             video_size = os.path.getsize(video_path) if os.path.exists(video_path) else 0
-            logger.info(
+            _log_debug(
                 f"[识曲] 视频已就绪: {video_path} ({video_size} bytes), "
                 f"截取前 {self.max_seconds}s 抽音轨"
             )
             return await self._normalize_to_wav(video_path, "视频")
         if isinstance(component, File):
-            logger.info(
+            _log_debug(
                 f"[识曲] 文件段: name={component.name!r}, "
                 f"url={component.url!r}, local={component.file_!r}"
             )
@@ -195,7 +211,7 @@ class MediaMaterializer:
             if not path or not os.path.exists(path):
                 logger.warning("[识曲] 文件下载失败")
                 return None
-            logger.info(
+            _log_debug(
                 f"[识曲] 文件下载完成: {path} "
                 f"({os.path.getsize(path)} bytes), 截取前 {self.max_seconds}s"
             )
@@ -256,7 +272,7 @@ class MediaMaterializer:
             except OSError:
                 pass
             return None
-        logger.info(
+        _log_debug(
             f"[识曲] {kind}转换完成: {out_path} "
             f"({os.path.getsize(out_path)} bytes, 截取 {self.max_seconds}s)"
         )
@@ -383,15 +399,15 @@ class AcrcloudEngine:
         form.add_field("channels", "1")
         url = self.host if self.host.startswith("http") else f"https://{self.host}"
         url = url.rstrip("/") + "/v1/identify"
-        logger.info(
+        _log_debug(
             f"[识曲] ACRCloud 请求: {url}, 上传音频 {len(sample)} bytes"
         )
         async with session.post(url, data=form) as resp:
             text = await resp.text()
-        logger.info(
+        _log_debug(
             f"[识曲] ACRCloud 响应: HTTP {resp.status}, {len(text)} bytes"
         )
-        logger.info(f"[识曲] ACRCloud 响应内容: {text[:200]}")
+        _log_debug(f"[识曲] ACRCloud 响应内容: {text[:200]}")
         try:
             payload = json.loads(text)
         except ValueError:
@@ -522,11 +538,11 @@ class XfyunAcrEngine:
             }
             async with session.post(url, json=body) as resp:
                 text = await resp.text()
-            logger.info(
+            _log_debug(
                 f"[识曲] 讯飞音乐识别请求完成: HTTP {resp.status}, "
                 f"{len(text)} bytes"
             )
-            logger.info(f"[识曲] 讯飞音乐识别响应: {text[:200]}")
+            _log_debug(f"[识曲] 讯飞音乐识别响应: {text[:200]}")
             try:
                 payload = json.loads(text)
             except ValueError:
@@ -669,11 +685,11 @@ class XfyunHummingEngine:
                 self.url, data=audio_bytes, headers=headers
             ) as resp:
                 text = await resp.text()
-            logger.info(
+            _log_debug(
                 f"[识曲] 讯飞哼唱识别请求完成: HTTP {resp.status}, "
                 f"上传 {len(audio_bytes)} bytes, 响应 {len(text)} bytes"
             )
-            logger.info(f"[识曲] 讯飞哼唱识别响应: {text[:200]}")
+            _log_debug(f"[识曲] 讯飞哼唱识别响应: {text[:200]}")
             try:
                 payload = json.loads(text)
             except ValueError:
@@ -751,17 +767,17 @@ class SongIdentifier:
                 name = type(engine).__name__
                 try:
                     if not engine.is_configured():
-                        logger.info(f"[识曲] 引擎 {name} 未配置，跳过")
+                        _log_debug(f"[识曲] 引擎 {name} 未配置，跳过")
                         continue
-                    logger.info(f"[识曲] 尝试引擎 {name} ...")
+                    _log_debug(f"[识曲] 尝试引擎 {name} ...")
                     info = await engine.identify(audio_path, session)
                     if info is not None:
-                        logger.info(
+                        _log_debug(
                             f"[识曲] 引擎 {name} 识别成功: "
                             f"{info.title} - {info.artist or '未知歌手'}"
                         )
                         return info
-                    logger.info(f"[识曲] 引擎 {name} 无结果，尝试下一引擎")
+                    _log_debug(f"[识曲] 引擎 {name} 无结果，尝试下一引擎")
                 except Exception as e:
                     logger.warning(f"[识曲] 引擎 {name} 失败: {e}")
                     continue
@@ -901,7 +917,7 @@ class SongEnricher:
         query = f"{song.title or ''} {song.artist or ''}".strip()
         if not query:
             return song
-        logger.info(f"[识曲] 增强查询(网易云): '{query}'")
+        _log_debug(f"[识曲] 增强查询(网易云): '{query}'")
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
@@ -909,16 +925,16 @@ class SongEnricher:
                     params={"s": query, "type": 1, "limit": 1},
                     headers=self.HEADERS,
                 )
-                logger.info(
+                _log_debug(
                     f"[识曲] 网易云搜索: HTTP {resp.status_code}, "
                     f"{len(resp.content)} bytes"
                 )
-                logger.info(f"[识曲] 网易云搜索响应: {resp.text[:200]}")
+                _log_debug(f"[识曲] 网易云搜索响应: {resp.text[:200]}")
                 resp.raise_for_status()
                 payload = resp.json()
                 songs = ((payload.get("result") or {}).get("songs")) or []
                 if not songs:
-                    logger.info("[识曲] 增强未命中，使用识别引擎原始信息")
+                    _log_debug("[识曲] 增强未命中，使用识别引擎原始信息")
                     return song
                 first = songs[0]
                 artists = ", ".join(
@@ -927,7 +943,7 @@ class SongEnricher:
                     if a.get("name")
                 )
                 song_id = str(first.get("id") or "")
-                logger.info(
+                _log_debug(
                     f"[识曲] 增强命中: {first.get('name')} - {artists} "
                     f"(id={song_id})"
                 )
@@ -1316,6 +1332,8 @@ class SongIdentifierPlugin(Star):
         """
         super().__init__(context)
         self.config = config
+        global _DEBUG_LOG
+        _DEBUG_LOG = bool(_cfg(config, "advanced", "debug_log", default=False))
         self.detector = TriggerDetector(
             _cfg(config, "trigger", "keyword", default="识曲") or "识曲"
         )
@@ -1337,7 +1355,8 @@ class SongIdentifierPlugin(Star):
         """
         if not self.detector.check(event):
             return
-        logger.info(
+        logger.info("[识曲] 开始识曲")
+        _log_debug(
             f"[识曲] 触发检测命中: 群聊={not event.is_private_chat()}, "
             f"发送者={event.get_sender_id()}"
         )
@@ -1345,7 +1364,7 @@ class SongIdentifierPlugin(Star):
         messages = event.get_messages() or []
         for comp in messages:
             if isinstance(comp, Reply):
-                logger.info(
+                _log_debug(
                     f"[识曲] 引用消息: id={comp.id}, sender="
                     f"{comp.sender_nickname}({comp.sender_id}), "
                     f"文本='{(comp.message_str or '')[:50]}'"
@@ -1354,11 +1373,11 @@ class SongIdentifierPlugin(Star):
 
         media = MediaExtractor.extract_media(event)
         if media is None:
-            logger.info("[识曲] 引用消息中无媒体段，提示用户")
+            _log_debug("[识曲] 引用消息中无媒体段，提示用户")
             await event.send(event.plain_result("请引用包含语音或视频的消息后再试。"))
             event.stop_event()
             return
-        logger.info(f"[识曲] 媒体段类型: {type(media).__name__}")
+        _log_debug(f"[识曲] 媒体段类型: {type(media).__name__}")
 
         try:
             audio_path = await self.materializer.materialize(media)
@@ -1370,7 +1389,7 @@ class SongIdentifierPlugin(Star):
             size = os.path.getsize(audio_path)
             duration = await self.materializer._probe_duration(audio_path)
             fmt = Path(audio_path).suffix.lstrip(".") or "?"
-            logger.info(
+            _log_debug(
                 f"[识曲] 音频就绪: 路径={audio_path}, 格式={fmt}, "
                 f"大小={size} bytes ({size / 1024:.1f} KB)"
                 + (f", 时长={duration:.1f}s" if duration is not None else ", 时长=未知")
@@ -1422,11 +1441,11 @@ class SongIdentifierPlugin(Star):
             "图片": "image",
             "卡片": "card",
         }.get(str(fmt_label).strip(), "text")
-        logger.info(f"[识曲] 输出格式: {fmt}")
+        _log_debug(f"[识曲] 输出格式: {fmt}")
         if fmt == "card":
             ok = await self._try_send_card(event, song)
             if ok:
-                logger.info("[识曲] QQ 音乐卡片发送成功")
+                _log_debug("[识曲] QQ 音乐卡片发送成功")
                 await self._send_link_if_enabled(event, song)
                 return
             logger.warning("[识曲] 卡片发送失败/不支持，降级为文本")
@@ -1436,13 +1455,13 @@ class SongIdentifierPlugin(Star):
                 await event.send(
                     event.chain_result([Comp.Image.fromBytes(image_bytes)])
                 )
-                logger.info(f"[识曲] 图片卡片发送完成 ({len(image_bytes)} bytes)")
+                _log_debug(f"[识曲] 图片卡片发送完成 ({len(image_bytes)} bytes)")
                 await self._send_link_if_enabled(event, song)
                 return
             logger.warning("[识曲] 图片生成失败，降级为文本")
         text = self.formatter.format_text(song)
         await event.send(event.plain_result(text))
-        logger.info(f"[识曲] 歌曲内容已发送: {text[:80]}")
+        _log_debug(f"[识曲] 歌曲内容已发送: {text[:80]}")
         await self._send_link_if_enabled(event, song)
 
     async def _send_link_if_enabled(self, event: AstrMessageEvent, song: SongInfo):
@@ -1458,7 +1477,7 @@ class SongIdentifierPlugin(Star):
         if not link_text:
             return
         await event.send(event.plain_result(link_text))
-        logger.info(f"[识曲] 试听链接已发送: {link_text}")
+        _log_debug(f"[识曲] 试听链接已发送: {link_text}")
 
     async def _try_send_card(self, event: AstrMessageEvent, song: SongInfo) -> bool:
         """按配置的音乐卡片平台三档顺序尝试发送卡片。
@@ -1488,7 +1507,7 @@ class SongIdentifierPlugin(Star):
                 _cfg(self.config, "output", "card_platforms", slot, default="") or ""
             )
             if label == "留空" or label not in PLATFORM_PROVIDERS:
-                logger.info(f"[识曲] 卡片平台 {slot}（{label or '留空'}）跳过")
+                _log_debug(f"[识曲] 卡片平台 {slot}（{label or '留空'}）跳过")
                 continue
             provider = PLATFORM_PROVIDERS[label]
             try:
@@ -1503,8 +1522,10 @@ class SongIdentifierPlugin(Star):
                 await bot.api.call_action(
                     action, **{target_key: target, "message": [segment]}
                 )
-                logger.info(f"[识曲] {label} 卡片发送成功")
+                _log_debug(f"[识曲] {label} 卡片发送成功")
                 return True
             except Exception as e:
                 logger.warning(f"[识曲] {label} 卡片发送失败: {e}，尝试下一档")
         return False
+
+

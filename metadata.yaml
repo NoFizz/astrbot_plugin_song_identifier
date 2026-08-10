@@ -4,7 +4,6 @@ desc: 引用语音/视频消息识曲插件（ACRCloud/Shazam/讯飞多引擎，
 version: 1.0.0
 author: NoFizz
 repo: ""
-astrbot_version: ">=4.17.0"
 support_platforms:
   - aiocqhttp
 license: "AGPL-3.0"

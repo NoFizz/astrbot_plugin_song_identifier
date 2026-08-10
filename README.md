@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/version-v1.0.0-blue?style=flat" alt="version">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat" alt="python">
   <img src="https://img.shields.io/badge/platform-OneBot--v11-orange?style=flat" alt="platform">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat" alt="license">
 </p>
 
 <p align="center">引用语音/视频消息识曲插件（讯飞/ACRCloud/Shazam 多引擎，支持哼唱识别）</p>
@@ -38,6 +39,7 @@
 - [平台支持](#平台支持)
 - [使用示例](#使用示例)
 - [常见问题](#常见问题)
+- [相关仓库](#相关仓库)
 - [维护者](#维护者)
 - [如何贡献](#如何贡献)
 - [许可证](#许可证)
@@ -211,6 +213,10 @@ git clone <仓库地址> astrbot_plugin_song_identifier
 
 链接来自网易云歌曲页（`music.163.com/song/{id}`），部分歌曲可能受版权限制无法在线播放，可在网易云客户端内搜索试听。
 
+## 相关仓库
+
+- [shazamio/ShazamIO](https://github.com/shazamio/ShazamIO) —— 本插件 Shazam 引擎所使用的第三方识别库（Python，逆向 Shazam 移动端接口，非官方实现）
+
 ## 维护者
 
 - [NoFizz](https://github.com/NoFizz)
@@ -224,4 +230,4 @@ git clone <仓库地址> astrbot_plugin_song_identifier
 
 ## 许可证
 
-本项目许可证暂未确定，如需使用请联系作者。
+本项目使用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）。

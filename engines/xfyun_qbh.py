@@ -1,0 +1,143 @@
+import base64
+import hashlib
+import json
+import time
+from collections.abc import Mapping
+
+import aiohttp
+
+from ..models import ErrorKind, RecognitionError, SongInfo
+
+
+def build_qbh_headers(
+    app_id: str, api_key: str, timestamp: str | None = None
+) -> dict[str, str]:
+    """Build Xfyun qbh headers for the humming-only AFS engine."""
+
+    current = timestamp or str(int(time.time()))
+    params = {"engine_type": "afs", "aue": "raw", "sample_rate": "16000"}
+    encoded = base64.b64encode(
+        json.dumps(params, separators=(",", ":")).encode()
+    ).decode()
+    checksum = hashlib.md5((api_key + current + encoded).encode()).hexdigest()
+    return {
+        "X-Appid": app_id,
+        "X-CurTime": current,
+        "X-Param": encoded,
+        "X-CheckSum": checksum,
+    }
+
+
+def parse_qbh_response(payload: Mapping) -> SongInfo | None:
+    """Parse a qbh humming response into a provider-neutral result."""
+
+    provider = "xfyun_qbh"
+    mode = "humming"
+    if not isinstance(payload, Mapping):
+        raise RecognitionError(
+            ErrorKind.PROTOCOL_ERROR, provider, mode, "response is not an object"
+        )
+    code = str(payload.get("code"))
+    if code != "0":
+        kind = ErrorKind.INPUT_INVALID
+        if code in {"10105", "102", "10407"}:
+            kind = ErrorKind.AUTH_FAILED
+        elif code in {"10114", "11200"}:
+            kind = ErrorKind.RATE_LIMITED
+        raise RecognitionError(
+            kind,
+            provider,
+            mode,
+            str(payload.get("desc") or "qbh request failed"),
+            code,
+        )
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    first = data[0]
+    if not isinstance(first, Mapping) or not first.get("song"):
+        return None
+    return SongInfo(
+        title=str(first["song"]),
+        artist=str(first["singer"]) if first.get("singer") else None,
+        provider=provider,
+        mode=mode,
+        acrid=str(first["song_id"]) if first.get("song_id") else None,
+    )
+
+
+class XfyunQbhEngine:
+    """Xfyun legacy humming-only qbh adapter configuration."""
+
+    provider = "xfyun_qbh"
+    mode = "humming"
+    url = "https://webqbh.xfyun.cn/v1/service/v1/qbh"
+
+    def __init__(self, app_id: str, api_key: str):
+        self.app_id = app_id.strip()
+        self.api_key = api_key.strip()
+
+    def is_configured(self) -> bool:
+        """Return whether qbh credentials are present."""
+
+        return bool(self.app_id and self.api_key)
+
+    async def identify(self, artifact, session: aiohttp.ClientSession, deadline: float):
+        """Send raw normalized WAV bytes to the qbh humming endpoint."""
+
+        if not self.is_configured():
+            raise RecognitionError(
+                ErrorKind.NOT_CONFIGURED,
+                self.provider,
+                self.mode,
+                "provider credentials are incomplete",
+            )
+        audio = artifact.path.read_bytes()
+        if len(audio) > 2 * 1024 * 1024:
+            raise RecognitionError(
+                ErrorKind.INPUT_INVALID,
+                self.provider,
+                self.mode,
+                "audio exceeds the 2 MiB provider limit",
+            )
+        timeout = max(0.1, deadline - time.monotonic())
+        try:
+            async with session.post(
+                self.url,
+                data=audio,
+                headers=build_qbh_headers(self.app_id, self.api_key),
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                if response.status in {401, 403}:
+                    raise RecognitionError(
+                        ErrorKind.AUTH_FAILED,
+                        self.provider,
+                        self.mode,
+                        "HTTP authentication failed",
+                        response.status,
+                    )
+                text = await response.text()
+        except RecognitionError:
+            raise
+        except TimeoutError as error:
+            raise RecognitionError(
+                ErrorKind.TIMEOUT, self.provider, self.mode, "request timed out"
+            ) from error
+        except aiohttp.ClientError as error:
+            raise RecognitionError(
+                ErrorKind.TEMPORARY_NETWORK,
+                self.provider,
+                self.mode,
+                type(error).__name__,
+                retryable=True,
+            ) from error
+        try:
+            payload = json.loads(text)
+        except ValueError as error:
+            raise RecognitionError(
+                ErrorKind.PROTOCOL_ERROR,
+                self.provider,
+                self.mode,
+                "response is not valid JSON",
+            ) from error
+        return parse_qbh_response(payload)

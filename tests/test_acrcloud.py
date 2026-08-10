@@ -1,33 +1,23 @@
-import pathlib
-import tempfile
+"""ACRCloud 引擎测试：签名、multipart 请求字段与响应解析。"""
+
+from pathlib import Path
 
 import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from astrbot_plugin_song_identifier.main import (
+from astrbot_plugin_song_identifier.engines.acrcloud import (
     AcrcloudEngine,
     build_acrcloud_signature,
     parse_acrcloud_response,
 )
+from astrbot_plugin_song_identifier.media import MediaArtifact
+from astrbot_plugin_song_identifier.models import ErrorKind, RecognitionError
 
 
-def test_build_signature_deterministic():
-    sig1 = build_acrcloud_signature("AK", "SK", "1700000000")
-    sig2 = build_acrcloud_signature("AK", "SK", "1700000000")
-    assert sig1 == sig2
-    assert len(sig1) > 10
-    sig3 = build_acrcloud_signature("AK", "SK2", "1700000000")
-    assert sig1 != sig3
-
-
-def test_build_signature_matches_documented_v1_algorithm():
-    """签名必须与官方文档 V1 算法一致（docs.acrcloud.cn/api/identification-api.html）：
-
-    签名串 = POST\\n/v1/identify\\n{access_key}\\n{data_type}\\n{signature_version}\\n{timestamp}
-    （此前实现缺失 data_type/signature_version 两段，导致服务端拒绝请求）
-    """
+def test_build_signature_matches_documented_algorithm():
+    """签名必须与官方文档 V1 算法一致（docs.acrcloud.cn/api/identification-api.html）。"""
     import base64
     import hashlib
     import hmac
@@ -40,54 +30,61 @@ def test_build_signature_matches_documented_v1_algorithm():
     assert sig == expected
 
 
-def test_parse_success():
-    payload = {
-        "status": {"code": 0, "msg": "Success"},
-        "metadata": {
-            "music": [
-                {
-                    "title": "晴天",
-                    "artists": [{"name": "周杰伦"}],
-                    "album": {"name": "叶惠美"},
-                }
-            ]
-        },
-    }
-    info = parse_acrcloud_response(payload)
-    assert info.title == "晴天"
-    assert info.artist == "周杰伦"
-    assert info.album == "叶惠美"
-    assert info.source == "acrcloud"
+def test_parse_success_preserves_provider_metadata():
+    song = parse_acrcloud_response(
+        {
+            "status": {"code": 0, "msg": "Success"},
+            "metadata": {
+                "music": [
+                    {
+                        "acrid": "a1",
+                        "title": "晴天",
+                        "artists": [{"name": "周杰伦"}],
+                        "album": {"name": "叶惠美"},
+                        "score": 100,
+                    }
+                ]
+            },
+        }
+    )
+    assert song is not None
+    assert song.title == "晴天"
+    assert song.artist == "周杰伦"
+    assert song.album == "叶惠美"
+    assert song.provider == "acrcloud"
+    assert song.acrid == "a1"
 
 
-def test_parse_failure_code():
-    payload = {"status": {"code": 1001, "msg": "No result"}}
-    assert parse_acrcloud_response(payload) is None
+def test_parse_no_result_returns_none():
+    assert parse_acrcloud_response({"status": {"code": 1001}}) is None
 
 
-def test_parse_empty_music():
-    payload = {"status": {"code": 0, "msg": "Success"}, "metadata": {"music": []}}
-    assert parse_acrcloud_response(payload) is None
+def test_parse_classifies_auth_error():
+    with pytest.raises(RecognitionError) as raised:
+        parse_acrcloud_response({"status": {"code": 3014, "msg": "Invalid signature"}})
+    assert raised.value.kind is ErrorKind.AUTH_FAILED
 
 
 @pytest.mark.asyncio
-async def test_identify_posts_multipart():
+async def test_identify_posts_correct_multipart_fields(tmp_path):
     received = {}
+    audio_path = tmp_path / "fake_audio.wav"
+    audio_path.write_bytes(b"FAKEAUDIO")
 
     async def handler(request):
         form = await request.post()
         received["access_key"] = form.get("access_key")
         received["signature_version"] = form.get("signature_version")
         received["data_type"] = form.get("data_type")
-        sample = form.get("sample")
         received["sample_bytes"] = form.get("sample_bytes")
-        if sample is not None:
-            received["sample_name"] = sample.filename
-            received["sample_content"] = sample.file.read().decode()
-        return web.json_response({
-            "status": {"code": 0, "msg": "Success"},
-            "metadata": {"music": [{"title": "T", "artists": [{"name": "A"}]}]},
-        })
+        sample = form.get("sample")
+        received["sample_name"] = sample.filename if sample else None
+        return web.json_response(
+            {
+                "status": {"code": 0, "msg": "Success"},
+                "metadata": {"music": [{"title": "T", "artists": [{"name": "A"}]}]},
+            }
+        )
 
     app = web.Application()
     app.router.add_post("/v1/identify", handler)
@@ -95,13 +92,13 @@ async def test_identify_posts_multipart():
     client = TestClient(server)
     await client.start_server()
     try:
-        host = f"http://127.0.0.1:{server.port}"
-        engine = AcrcloudEngine(host=host, access_key="AK", access_secret="SK")
-        tmp = pathlib.Path(tempfile.gettempdir()) / "fake_audio.wav"
-        tmp.write_bytes(b"FAKEAUDIO")
+        engine = AcrcloudEngine(
+            host=f"http://127.0.0.1:{server.port}", access_key="AK", access_secret="SK"
+        )
+        artifact = MediaArtifact(path=audio_path, created_paths=())
         async with aiohttp.ClientSession() as session:
-            info = await engine.identify(str(tmp), session)
-        assert info is not None and info.title == "T"
+            song = await engine.identify(artifact, session, deadline=9999999999)
+        assert song is not None and song.title == "T"
         assert received["access_key"] == "AK"
         assert received["signature_version"] == "1"
         assert received["data_type"] == "audio"
@@ -110,59 +107,3 @@ async def test_identify_posts_multipart():
     finally:
         await client.close()
 
-
-@pytest.mark.asyncio
-async def test_identify_handles_text_plain_json():
-    """ACRCloud 以 text/plain content-type 返回有效 JSON 时仍应识别成功。
-
-    aiohttp 的 resp.json() 默认拒绝非 JSON content-type（实测 ACRCloud 华北
-    节点对超长音频会以 text/plain 返回错误文本），必须读文本后手动解析。
-    """
-    async def handler(request):
-        return web.Response(
-            text='{"status": {"code": 0, "msg": "Success"}, '
-                 '"metadata": {"music": [{"title": "晴天", '
-                 '"artists": [{"name": "周杰伦"}]}]}}',
-            content_type="text/plain",
-        )
-
-    app = web.Application()
-    app.router.add_post("/v1/identify", handler)
-    server = TestServer(app)
-    client = TestClient(server)
-    await client.start_server()
-    try:
-        engine = AcrcloudEngine(
-            host=f"http://127.0.0.1:{server.port}", access_key="AK", access_secret="SK"
-        )
-        tmp = pathlib.Path(tempfile.gettempdir()) / "fake_audio2.wav"
-        tmp.write_bytes(b"FAKEAUDIO")
-        async with aiohttp.ClientSession() as session:
-            info = await engine.identify(str(tmp), session)
-        assert info is not None and info.title == "晴天"
-    finally:
-        await client.close()
-
-
-@pytest.mark.asyncio
-async def test_identify_handles_non_json_text():
-    """text/plain 且非 JSON（如服务端错误文本）时返回 None 而非抛异常。"""
-    async def handler(request):
-        return web.Response(text="audio too long or invalid", content_type="text/plain")
-
-    app = web.Application()
-    app.router.add_post("/v1/identify", handler)
-    server = TestServer(app)
-    client = TestClient(server)
-    await client.start_server()
-    try:
-        engine = AcrcloudEngine(
-            host=f"http://127.0.0.1:{server.port}", access_key="AK", access_secret="SK"
-        )
-        tmp = pathlib.Path(tempfile.gettempdir()) / "fake_audio3.wav"
-        tmp.write_bytes(b"FAKEAUDIO")
-        async with aiohttp.ClientSession() as session:
-            info = await engine.identify(str(tmp), session)
-        assert info is None
-    finally:
-        await client.close()

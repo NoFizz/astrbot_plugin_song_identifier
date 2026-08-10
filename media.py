@@ -2,7 +2,33 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from astrbot.api.message_components import File, Record, Reply, Video
+from astrbot.api.message_components import At, File, Record, Reply, Video
+
+
+class TriggerDetector:
+    """判断消息是否触发识曲：关键词 + 引用；群聊需 @bot，私聊无需。
+
+    Args:
+        keyword: 触发关键词。
+    """
+
+    def __init__(self, keyword: str):
+        self.keyword = keyword
+
+    def check(self, event) -> bool:
+        """返回消息是否触发识曲。"""
+        if self.keyword not in (event.message_str or ""):
+            return False
+        has_reply = any(isinstance(comp, Reply) for comp in event.get_messages() or [])
+        if not has_reply:
+            return False
+        if event.is_private_chat():
+            return True
+        for comp in event.get_messages() or []:
+            if isinstance(comp, At) and str(comp.qq) == str(event.get_self_id()):
+                return True
+        return False
+
 
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_temp_path

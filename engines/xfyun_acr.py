@@ -159,6 +159,7 @@ class XfyunAcrEngine:
         self.mode = mode
         self.host = self.HOST
         self.path = self.PATHS[mode]
+        self.base_url = f"https://{self.host}"
 
     def is_configured(self) -> bool:
         """Return whether all required credentials are present."""
@@ -195,7 +196,7 @@ class XfyunAcrEngine:
                 self.api_key, self.api_secret, self.host, self.path, date
             )
             url = (
-                f"https://{self.host}{self.path}"
+                f"{self.base_url}{self.path}"
                 f"?authorization={quote(authorization)}"
                 f"&host={quote(self.host)}&date={quote(date)}"
             )

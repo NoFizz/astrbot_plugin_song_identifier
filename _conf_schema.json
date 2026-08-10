@@ -23,7 +23,7 @@
                 "hint": "每档只能选择一款引擎；某档识别失败或无结果时自动尝试下一档。选择「留空」则跳过该档",
                 "items": {
                     "primary": {
-                        "description": "首选引擎",
+                        "description": "首选",
                         "type": "string",
                         "options": [
                             "ACRCloud",
@@ -33,11 +33,10 @@
                             "讯飞开放平台/自研",
                             "留空"
                         ],
-                        "default": "ACRCloud",
-                        "hint": "优先使用的引擎。讯飞开放平台/ACRCloud = 原声识别；·哼唱 = 旋律哼唱识别；讯飞开放平台/自研 = 旧版 qbh 哼唱接口"
+                        "default": "Shazam"
                     },
                     "secondary": {
-                        "description": "次选引擎",
+                        "description": "次选",
                         "type": "string",
                         "options": [
                             "ACRCloud",
@@ -47,11 +46,10 @@
                             "讯飞开放平台/自研",
                             "留空"
                         ],
-                        "default": "Shazam",
-                        "hint": "首选引擎失败或无结果时尝试。选择「留空」则跳过"
+                        "default": "留空"
                     },
                     "fallback": {
-                        "description": "备选引擎",
+                        "description": "备选",
                         "type": "string",
                         "options": [
                             "ACRCloud",
@@ -61,8 +59,7 @@
                             "讯飞开放平台/自研",
                             "留空"
                         ],
-                        "default": "留空",
-                        "hint": "前两档都失败时的兜底引擎。选择「留空」则跳过"
+                        "default": "留空"
                     }
                 }
             },
@@ -125,13 +122,13 @@
                     "图片",
                     "卡片"
                 ],
-                "default": "文本",
-                "hint": "文本=纯文本（格式可用下方模板自定义）；图片=图片卡片（含专辑封面）；卡片=QQ 音乐卡片（发送失败自动降级为文本）"
+                "default": "图片",
+                "hint": "文本=纯文本（格式可用下方模板自定义）；图片=竖版图片卡片；卡片=QQ 音乐卡片（发送失败自动降级为文本）"
             },
             "text_template": {
                 "description": "文本输出模板",
                 "type": "string",
-                "default": "{title} - {artist}",
+                "default": "歌名：{title}\n歌手：{artist}",
                 "editor_mode": true,
                 "editor_language": "plaintext",
                 "editor_theme": "vs-dark",
@@ -150,7 +147,7 @@
             "link": {
                 "description": "输出试听链接",
                 "type": "bool",
-                "default": true,
+                "default": false,
                 "hint": "所有输出形式生效：主内容发送后分条发送链接"
             },
             "card_platforms": {
@@ -159,26 +156,24 @@
                 "hint": "仅 card 输出形式生效：按 首选→次选 顺序尝试，首个发送成功的生效；「留空」跳过该档",
                 "items": {
                     "primary": {
-                        "description": "首选平台",
+                        "description": "首选",
                         "type": "string",
                         "options": [
                             "网易云音乐",
                             "QQ音乐",
                             "留空"
                         ],
-                        "default": "网易云音乐",
-                        "hint": "优先使用的音乐卡片平台"
+                        "default": "网易云音乐"
                     },
                     "secondary": {
-                        "description": "次选平台",
+                        "description": "次选",
                         "type": "string",
                         "options": [
                             "网易云音乐",
                             "QQ音乐",
                             "留空"
                         ],
-                        "default": "QQ音乐",
-                        "hint": "首选平台失败时尝试。选择「留空」则跳过"
+                        "default": "QQ音乐"
                     }
                 }
             }

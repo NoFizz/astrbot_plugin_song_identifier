@@ -140,27 +140,27 @@ class MediaExtractor:
 
 
 class MediaMaterializer:
-    """将媒体段落地为本地音频文件（语音→wav，视频→抽音轨wav，文件→原格式）。"""
+    """将媒体段统一落地为截取前 N 秒的 16k 单声道 wav（语音/视频/文件通用）。"""
 
     def __init__(self, max_seconds: int = 30):
         """初始化媒体落地器。
 
         Args:
-            max_seconds: 视频抽音轨时的最大时长（秒）。ACRCloud 官方建议
+            max_seconds: 媒体统一截取的最大时长（秒）。ACRCloud 官方建议
                 识别内容小于 12 秒且文件小于 1MB（30s×16k×16bit≈960KB），
-                超长音频会生成超大 wav 导致上传受限或识别失败，因此按需
-                截取前 N 秒。
+                超长音频会生成超大 wav 导致上传受限或识别失败；语音/视频/
+                文件三类媒体统一截取前 N 秒并重采样为 16k 单声道。
         """
         self.max_seconds = max_seconds
 
     async def materialize(self, component) -> str | None:
-        """把媒体段落地为本地音频文件路径。
+        """把媒体段统一落地为截取前 max_seconds 秒的 16k 单声道 wav。
 
         Args:
             component: Record/Video/File 消息段。
 
         Returns:
-            本地音频文件路径；无法落地时返回 None。
+            本地 wav 文件路径；无法落地时返回 None。
         """
         if isinstance(component, Record):
             src = (
@@ -168,9 +168,13 @@ class MediaMaterializer:
             )
             logger.info(f"[识曲] 语音段属性: {src}")
             path = await component.convert_to_file_path()
-            if path:
-                logger.info(f"[识曲] 语音转码完成: {path}")
-            return path
+            if not path:
+                logger.warning("[识曲] 语音下载/转码失败")
+                return None
+            logger.info(
+                f"[识曲] 语音转码完成: {path}, 截取前 {self.max_seconds}s"
+            )
+            return await self._normalize_to_wav(path, "语音")
         if isinstance(component, Video):
             video_path = await component.convert_to_file_path()
             if not video_path:
@@ -181,79 +185,46 @@ class MediaMaterializer:
                 f"[识曲] 视频已就绪: {video_path} ({video_size} bytes), "
                 f"截取前 {self.max_seconds}s 抽音轨"
             )
-            out_path = str(
-                Path(tempfile.gettempdir())
-                / f"songid_{os.getpid()}_{uuid.uuid4().hex}.wav"
-            )
-            result = await self._extract_audio_from_video(video_path, out_path)
-            if result:
-                out_size = (
-                    os.path.getsize(result) if os.path.exists(result) else 0
-                )
-                logger.info(f"[识曲] 音轨提取完成: {result} ({out_size} bytes)")
-            return result
+            return await self._normalize_to_wav(video_path, "视频")
         if isinstance(component, File):
             logger.info(
                 f"[识曲] 文件段: name={component.name!r}, "
                 f"url={component.url!r}, local={component.file_!r}"
             )
             path = await component.get_file(allow_return_url=False)
-            if path:
-                logger.info(f"[识曲] 文件下载完成: {path}")
-            return path
+            if not path or not os.path.exists(path):
+                logger.warning("[识曲] 文件下载失败")
+                return None
+            logger.info(
+                f"[识曲] 文件下载完成: {path} "
+                f"({os.path.getsize(path)} bytes), 截取前 {self.max_seconds}s"
+            )
+            return await self._normalize_to_wav(path, "文件")
         logger.warning(f"[识曲] 不支持的媒体段类型: {type(component).__name__}")
         return None
 
-    async def _probe_duration(self, path: str) -> float | None:
-        """用 ffprobe 探测音频时长（秒）。
+    async def _normalize_to_wav(self, src_path: str, kind: str) -> str | None:
+        """用 ffmpeg 将媒体统一转为截取前 max_seconds 秒的 16k 单声道 wav。
 
         Args:
-            path: 本地音频文件路径。
+            src_path: 源音频/视频文件路径。
+            kind: 日志用媒体类型名（语音/视频/文件）。
 
         Returns:
-            时长（秒）；探测失败时返回 None。
+            成功时返回输出 wav 路径；ffmpeg 失败或输出不存在时返回 None。
         """
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            out, _ = await proc.communicate()
-            if proc.returncode != 0:
-                return None
-            return float(out.decode().strip())
-        except (OSError, ValueError):
-            return None
-
-    async def _extract_audio_from_video(
-        self, video_path: str, out_path: str
-    ) -> str | None:
-        """用 ffmpeg 从视频中抽取音轨：截取前 max_seconds 秒、16k 单声道 wav。
-
-        Args:
-            video_path: 本地视频文件路径。
-            out_path: 输出 wav 文件路径。
-
-        Returns:
-            成功时返回 out_path；ffmpeg 失败或输出不存在时返回 None。
-        """
+        out_path = str(
+            Path(tempfile.gettempdir())
+            / f"songid_{os.getpid()}_{uuid.uuid4().hex}.wav"
+        )
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg",
                 "-y",
                 "-i",
-                video_path,
+                src_path,
                 "-t",
                 str(self.max_seconds),
-                "-vn",
                 "-acodec",
                 "pcm_s16le",
                 "-ar",
@@ -285,7 +256,40 @@ class MediaMaterializer:
             except OSError:
                 pass
             return None
+        logger.info(
+            f"[识曲] {kind}转换完成: {out_path} "
+            f"({os.path.getsize(out_path)} bytes, 截取 {self.max_seconds}s)"
+        )
         return out_path
+
+    async def _probe_duration(self, path: str) -> float | None:
+        """用 ffprobe 探测音频时长（秒）。
+
+        Args:
+            path: 本地音频文件路径。
+
+        Returns:
+            时长（秒）；探测失败时返回 None。
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return None
+            return float(out.decode().strip())
+        except (OSError, ValueError):
+            return None
 
 
 def build_acrcloud_signature(

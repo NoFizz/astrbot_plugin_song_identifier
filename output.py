@@ -59,11 +59,10 @@ def _load_cjk_font(size: int = 20, bold: bool = False):
 class ResultFormatter:
     """将识别结果格式化为文本或图片。"""
 
-    CARD_WIDTH = 600
-    CARD_HEIGHT = 300
-    THUMB_SIZE = 260  # 封面尺寸（与设计稿一致）
-    TEXT_MARGIN = 34  # 文字区与封面间距
-    FALLBACK_COLORS = ((110, 150, 255), (190, 120, 255))  # 蓝紫兜底
+    CARD_WIDTH = 480
+    CARD_HEIGHT = 620
+    THUMB_SIZE = 440  # 封面尺寸：上方约占 3/4 区域
+    COVER_MARGIN = 20  # 封面留白
 
     def __init__(self, cfg: dict):
         self.cfg = cfg
@@ -112,7 +111,7 @@ class ResultFormatter:
         return f"🔗 {url}" if url else None
 
     async def build_image(self, enriched: EnrichedSong) -> bytes | None:
-        """绘制展示用音乐卡片（封面 + 歌名 + 歌手），失败返回 None。"""
+        """绘制展示用音乐卡片（上封面 + 下歌名/歌手），失败返回 None。"""
         from . import log
 
         try:
@@ -138,7 +137,6 @@ class ResultFormatter:
         self, enriched: EnrichedSong, cover: Image.Image | None
     ) -> Image.Image:
         W, H = self.CARD_WIDTH, self.CARD_HEIGHT
-        thumb = None
 
         # 1) 背景：封面放大模糊铺满；无封面时深色渐变兜底
         if cover is not None:
@@ -151,140 +149,85 @@ class ResultFormatter:
                 "RGBA"
             )
 
-        # 2) 左浅右深的暗色叠加，保证右侧文字清晰
+        # 2) 上浅下深的暗色叠加，保证底部文字清晰
         overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         od = ImageDraw.Draw(overlay)
-        for x in range(W):
-            od.line([(x, 0), (x, H)], fill=(10, 10, 22, int(80 + 110 * x / W)))
+        for y in range(H):
+            od.line([(0, y), (W, y)], fill=(10, 10, 22, int(60 + 120 * y / H)))
         canvas = Image.alpha_composite(canvas, overlay)
 
-        margin = (H - self.THUMB_SIZE) // 2
-        tx = ty = margin
+        cx = (W - self.THUMB_SIZE) // 2
+        cy = self.COVER_MARGIN
 
-        # 3) 封面：圆角 + 极柔和投影（无描边）
+        # 3) 封面：圆角 + 极柔和投影；无封面画占位块
         if cover is not None:
             thumb = cover.convert("RGB").resize((self.THUMB_SIZE, self.THUMB_SIZE))
-            self._paste_cover(canvas, thumb, tx, ty, radius=16)
+            self._paste_cover(canvas, thumb, cx, cy, radius=24)
         else:
             d0 = ImageDraw.Draw(canvas)
             d0.rounded_rectangle(
-                (tx, ty, tx + self.THUMB_SIZE, ty + self.THUMB_SIZE),
-                radius=16,
+                (cx, cy, cx + self.THUMB_SIZE, cy + self.THUMB_SIZE),
+                radius=24,
                 fill=(255, 255, 255, 16),
             )
-            note_font = _load_cjk_font(72)
+            note_font = _load_cjk_font(96)
             bbox = d0.textbbox((0, 0), "♪", font=note_font)
             d0.text(
                 (
-                    tx + (self.THUMB_SIZE - (bbox[2] - bbox[0])) / 2 - bbox[0],
-                    ty + (self.THUMB_SIZE - (bbox[3] - bbox[1])) / 2 - bbox[1],
+                    cx + (self.THUMB_SIZE - (bbox[2] - bbox[0])) / 2 - bbox[0],
+                    cy + (self.THUMB_SIZE - (bbox[3] - bbox[1])) / 2 - bbox[1],
                 ),
                 "♪",
                 fill=(255, 255, 255, 90),
                 font=note_font,
             )
 
-        # 4) 文字区：粗体歌名 + 封面取色渐变装饰线 + 灰色歌手
+        # 4) 底部文字区：歌名（较大）+ 歌手（较小），水平居中、垂直居中于剩余区域
         draw = ImageDraw.Draw(canvas)
-        font_title = _load_cjk_font(30, bold=True)
-        font_artist = _load_cjk_font(19)
+        font_title = _load_cjk_font(34, bold=True)
+        font_artist = _load_cjk_font(20)
 
-        text_x = tx + self.THUMB_SIZE + self.TEXT_MARGIN
-        max_w = W - text_x - self.TEXT_MARGIN
-
+        max_w = W - 80
         title = self._fit_text(
             draw, enriched.song.title or "未知歌曲", font_title, max_w
         )
-        draw.text((text_x, 100), title, fill=(255, 255, 255, 245), font=font_title)
+        artist = (
+            self._fit_text(draw, enriched.song.artist, font_artist, max_w)
+            if enriched.song.artist
+            else None
+        )
+
         tb = draw.textbbox((0, 0), title, font=font_title)
-        line_y = 100 + (tb[3] - tb[1]) + 22
+        title_h = tb[3] - tb[1]
+        gap = 14
+        if artist:
+            ab = draw.textbbox((0, 0), artist, font=font_artist)
+            artist_h = ab[3] - ab[1]
+            total = title_h + gap + artist_h
+        else:
+            total = title_h
 
-        # 渐变装饰线：颜色直接从封面提取（无封面时用蓝紫兜底）
-        accent = self._extract_accent_colors(thumb)
-        line_len = min(max_w, 240)
-        for i in range(line_len):
-            t = i / line_len
-            color = self._gradient_pixel(accent, t)
-            draw.line(
-                [(text_x + i, line_y), (text_x + i, line_y + 2)],
-                fill=color,
-            )
+        area_top = cy + self.THUMB_SIZE
+        top = area_top + (H - area_top - total) // 2
 
-        if enriched.song.artist:
-            artist = self._fit_text(draw, enriched.song.artist, font_artist, max_w)
+        title_w = draw.textlength(title, font=font_title)
+        draw.text(
+            ((W - title_w) / 2 - tb[0], top - tb[1]),
+            title,
+            fill=(255, 255, 255, 245),
+            font=font_title,
+        )
+
+        if artist:
+            artist_w = draw.textlength(artist, font=font_artist)
             draw.text(
-                (text_x, line_y + 18),
+                ((W - artist_w) / 2 - ab[0], top + title_h + gap - ab[1]),
                 artist,
                 fill=(255, 255, 255, 160),
                 font=font_artist,
             )
 
         return canvas.convert("RGB")
-
-    # ---------------- 取色与渐变 ----------------
-
-    def _extract_accent_colors(self, cover: Image.Image | None) -> tuple[tuple, tuple]:
-        """从封面提取两个高鲜艳度颜色（与 HTML 设计稿同一策略）。
-
-        24×24 缩略图取色 → 按鲜艳度降序 → 第二个颜色要求与第一个色差 > 100
-        → 每个颜色提亮 25%。失败或无封面时返回蓝紫兜底。
-
-        Args:
-            cover: 封面图像（可为 None）。
-
-        Returns:
-            两个 RGB 颜色元组。
-        """
-        if cover is None:
-            return self.FALLBACK_COLORS
-        try:
-            small = cover.convert("RGB").resize((24, 24))
-            if hasattr(small, "get_flattened_data"):
-                pixels = list(small.get_flattened_data())
-            else:  # Pillow < 12 兼容
-                pixels = list(small.getdata())
-
-            def _score(p):
-                mx, mn = max(p), min(p)
-                return mx * 0.4 + (mx - mn) * 0.6
-
-            def _dist(a, b):
-                return sum(abs(x - y) for x, y in zip(a, b))
-
-            def _lift(c, f):
-                return tuple(int(v + (255 - v) * f) for v in c)
-
-            pixels.sort(key=_score, reverse=True)
-            picked = []
-            for p in pixels:
-                if all(_dist(p, q) > 100 for q in picked):
-                    picked.append(_lift(p, 0.25))
-                if len(picked) == 2:
-                    break
-            if len(picked) == 1:
-                picked.append(_lift(picked[0], 0.5))
-            return tuple(picked) if len(picked) == 2 else self.FALLBACK_COLORS
-        except Exception:
-            return self.FALLBACK_COLORS
-
-    @staticmethod
-    def _gradient_pixel(accent: tuple[tuple, tuple], t: float) -> tuple:
-        """渐变线第 t（0..1）处的 RGBA 颜色。
-
-        0 → 第一色（不透明）；过渡到第二色 85% 不透明度；末尾渐隐为透明。
-        """
-        c1, c2 = accent
-        if t <= 0.55:
-            tt = t / 0.55
-            r = int(c1[0] + (c2[0] - c1[0]) * tt)
-            g = int(c1[1] + (c2[1] - c1[1]) * tt)
-            b = int(c1[2] + (c2[2] - c1[2]) * tt)
-            a = int(255 - (255 - 217) * tt)  # 第一色 255 → 第二色 217
-        else:
-            tt = (t - 0.55) / 0.45
-            r, g, b = c2
-            a = int(217 * (1 - tt))  # 217 → 0 渐隐
-        return (r, g, b, max(0, min(255, a)))
 
     # ---------------- 绘制辅助 ----------------
 
@@ -317,7 +260,7 @@ class ResultFormatter:
     def _paste_cover(
         canvas: Image.Image, thumb: Image.Image, x: int, y: int, radius: int
     ):
-        """圆角封面 + 极柔和投影（弱化阴影，无描边）。"""
+        """圆角封面 + 极柔和投影（无描边）。"""
         s = thumb.size[0]
         pad = 18
         shadow = Image.new("RGBA", (s + pad * 2, s + pad * 2), (0, 0, 0, 0))
@@ -328,7 +271,6 @@ class ResultFormatter:
         )
         shadow = shadow.filter(ImageFilter.GaussianBlur(16))
         canvas.alpha_composite(shadow, (x - pad + 4, y - pad + 8))
-
         mask = Image.new("L", (s, s), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
             (0, 0, s - 1, s - 1), radius=radius, fill=255

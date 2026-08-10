@@ -109,6 +109,7 @@ def test_xfyun_decoder_supports_gzip_humming_response():
     assert song.provider == "xfyun_acr"
     assert song.mode == "humming"
     assert song.score == 0.96
+    assert song.provider_sid == "sid-1"
 
 
 def test_xfyun_decoder_classifies_outer_auth_error():
@@ -208,3 +209,38 @@ async def test_shazam_engine_enforces_deadline(monkeypatch, tmp_path):
         await ShazamEngine().identify(artifact, deadline=time.monotonic() + 0.01)
 
     assert raised.value.kind is ErrorKind.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_acrcloud_engine_rejects_expired_deadline_without_request(
+    monkeypatch, tmp_path
+):
+    from astrbot_plugin_song_identifier.engines.acrcloud import AcrcloudEngine
+
+    engine = AcrcloudEngine(
+        host="http://localhost", access_key="AK", access_secret="SK"
+    )
+    artifact = MediaArtifact(Path(tmp_path) / "audio.wav", ())
+
+    class BoomSession:
+        def post(self, *args, **kwargs):
+            raise AssertionError("provider must not send a request after deadline")
+
+    with pytest.raises(RecognitionError) as raised:
+        await engine.identify(artifact, BoomSession(), deadline=time.monotonic() - 1)
+
+    assert raised.value.kind is ErrorKind.TIMEOUT
+
+
+def test_acrcloud_rate_limit_retryable_matches_official_semantics():
+    with pytest.raises(RecognitionError) as raised:
+        parse_acrcloud_response({"status": {"code": 3015, "msg": "QPS exceeded"}})
+
+    assert raised.value.kind is ErrorKind.RATE_LIMITED
+    assert raised.value.retryable is True
+
+    with pytest.raises(RecognitionError) as raised:
+        parse_acrcloud_response({"status": {"code": 3003, "msg": "limit exceeded"}})
+
+    assert raised.value.kind is ErrorKind.RATE_LIMITED
+    assert raised.value.retryable is False

@@ -75,6 +75,17 @@ class ShazamEngine:
             ) from error
         except RecognitionError:
             raise
+        except (ValueError, TypeError) as error:
+            raise RecognitionError(
+                ErrorKind.INPUT_INVALID, self.provider, self.mode, type(error).__name__
+            ) from error
+        except ImportError as error:
+            raise RecognitionError(
+                ErrorKind.NOT_CONFIGURED,
+                self.provider,
+                self.mode,
+                "shazamio is unavailable",
+            ) from error
         except Exception as error:
             raise RecognitionError(
                 ErrorKind.TEMPORARY_NETWORK,

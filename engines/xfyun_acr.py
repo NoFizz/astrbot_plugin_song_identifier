@@ -1,11 +1,15 @@
+import asyncio
 import base64
 import gzip
 import hashlib
 import hmac
 import json
+import os
+import tempfile
 import time
 from collections.abc import Mapping
 from email.utils import formatdate
+from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
@@ -96,7 +100,10 @@ def decode_xfyun_response(payload: Mapping, mode: str) -> SongInfo | None:
             else ErrorKind.PROTOCOL_ERROR
         )
         raise RecognitionError(kind, provider, mode, message, code)
-    output = (payload.get("payload") or {}).get("output_text")
+    outer_payload = payload.get("payload")
+    output = (
+        outer_payload.get("output_text") if isinstance(outer_payload, Mapping) else None
+    )
     if not isinstance(output, Mapping) or not output.get("text"):
         raise RecognitionError(
             ErrorKind.PROTOCOL_ERROR, provider, mode, "output_text is missing"
@@ -129,6 +136,7 @@ def decode_xfyun_response(payload: Mapping, mode: str) -> SongInfo | None:
     )
     if song is not None:
         song.mode = mode
+        song.provider_sid = str(header.get("sid")) if header.get("sid") else None
     return song
 
 
@@ -167,72 +175,132 @@ class XfyunAcrEngine:
                 self.mode,
                 "provider credentials are incomplete",
             )
-        audio = artifact.path.read_bytes()
-        body = build_xfyun_request_body(self.app_id, self.mode, audio)
-        date = formatdate(usegmt=True)
-        authorization = build_xfyun_authorization(
-            self.api_key, self.api_secret, self.host, self.path, date
-        )
-        url = (
-            f"https://{self.host}{self.path}"
-            f"?authorization={quote(authorization)}"
-            f"&host={quote(self.host)}&date={quote(date)}"
-        )
-        timeout = max(0.1, deadline - time.monotonic())
+        if deadline <= time.monotonic():
+            raise RecognitionError(
+                ErrorKind.TIMEOUT, self.provider, self.mode, "deadline expired"
+            )
+        mp3_path = await self._to_mp3(artifact.path)
+        if mp3_path is None:
+            raise RecognitionError(
+                ErrorKind.INPUT_INVALID,
+                self.provider,
+                self.mode,
+                "MP3 conversion failed",
+            )
         try:
-            async with session.post(
-                url,
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as response:
-                if response.status in {401, 403}:
-                    raise RecognitionError(
-                        ErrorKind.AUTH_FAILED,
-                        self.provider,
-                        self.mode,
-                        "HTTP authentication failed",
-                        response.status,
-                    )
-                if response.status == 429:
-                    raise RecognitionError(
-                        ErrorKind.RATE_LIMITED,
-                        self.provider,
-                        self.mode,
-                        "HTTP rate limit exceeded",
-                        response.status,
-                        True,
-                    )
-                if response.status >= 500:
-                    raise RecognitionError(
-                        ErrorKind.TEMPORARY_NETWORK,
-                        self.provider,
-                        self.mode,
-                        "upstream service error",
-                        response.status,
-                        True,
-                    )
-                text = await response.text()
-        except RecognitionError:
+            audio = mp3_path.read_bytes()
+            body = build_xfyun_request_body(self.app_id, self.mode, audio)
+            date = formatdate(usegmt=True)
+            authorization = build_xfyun_authorization(
+                self.api_key, self.api_secret, self.host, self.path, date
+            )
+            url = (
+                f"https://{self.host}{self.path}"
+                f"?authorization={quote(authorization)}"
+                f"&host={quote(self.host)}&date={quote(date)}"
+            )
+            timeout = max(0.1, deadline - time.monotonic())
+            try:
+                async with session.post(
+                    url,
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as response:
+                    if response.status in {401, 403}:
+                        raise RecognitionError(
+                            ErrorKind.AUTH_FAILED,
+                            self.provider,
+                            self.mode,
+                            "HTTP authentication failed",
+                            response.status,
+                        )
+                    if response.status == 429:
+                        raise RecognitionError(
+                            ErrorKind.RATE_LIMITED,
+                            self.provider,
+                            self.mode,
+                            "HTTP rate limit exceeded",
+                            response.status,
+                            True,
+                        )
+                    if response.status >= 500:
+                        raise RecognitionError(
+                            ErrorKind.TEMPORARY_NETWORK,
+                            self.provider,
+                            self.mode,
+                            "upstream service error",
+                            response.status,
+                            True,
+                        )
+                    if response.status < 200 or response.status >= 300:
+                        raise RecognitionError(
+                            ErrorKind.PROTOCOL_ERROR,
+                            self.provider,
+                            self.mode,
+                            "unexpected HTTP response",
+                            response.status,
+                        )
+                    text = await response.text()
+            except RecognitionError:
+                raise
+            except (TimeoutError, aiohttp.ServerTimeoutError) as error:
+                raise RecognitionError(
+                    ErrorKind.TIMEOUT, self.provider, self.mode, "request timed out"
+                ) from error
+            except aiohttp.ClientError as error:
+                raise RecognitionError(
+                    ErrorKind.TEMPORARY_NETWORK,
+                    self.provider,
+                    self.mode,
+                    type(error).__name__,
+                    retryable=True,
+                ) from error
+            try:
+                payload = json.loads(text)
+            except ValueError as error:
+                raise RecognitionError(
+                    ErrorKind.PROTOCOL_ERROR,
+                    self.provider,
+                    self.mode,
+                    "response is not valid JSON",
+                ) from error
+            return decode_xfyun_response(payload, self.mode)
+        finally:
+            mp3_path.unlink(missing_ok=True)
+
+    async def _to_mp3(self, source):
+        """Create a real 16 kHz mono MP3 for the Xfyun lame payload."""
+
+        output = (
+            Path(tempfile.gettempdir())
+            / f"xfyun_{os.getpid()}_{os.urandom(8).hex()}.mp3"
+        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                str(output),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await process.wait()
+            if process.returncode != 0 or not output.exists():
+                output.unlink(missing_ok=True)
+                return None
+            return output
+        except asyncio.CancelledError:
+            output.unlink(missing_ok=True)
             raise
-        except TimeoutError as error:
-            raise RecognitionError(
-                ErrorKind.TIMEOUT, self.provider, self.mode, "request timed out"
-            ) from error
-        except aiohttp.ClientError as error:
-            raise RecognitionError(
-                ErrorKind.TEMPORARY_NETWORK,
-                self.provider,
-                self.mode,
-                type(error).__name__,
-                retryable=True,
-            ) from error
-        try:
-            payload = json.loads(text)
-        except ValueError as error:
-            raise RecognitionError(
-                ErrorKind.PROTOCOL_ERROR,
-                self.provider,
-                self.mode,
-                "response is not valid JSON",
-            ) from error
-        return decode_xfyun_response(payload, self.mode)
+        except OSError:
+            output.unlink(missing_ok=True)
+            return None

@@ -61,6 +61,7 @@ def parse_acrcloud_response(
             kind = ErrorKind.AUTH_FAILED
         elif code in {3003, 3015}:
             kind = ErrorKind.RATE_LIMITED
+            retryable = code == 3015
         elif code in {3000, 3010}:
             kind = ErrorKind.TEMPORARY_NETWORK
             retryable = True
@@ -134,6 +135,10 @@ class AcrcloudEngine:
                 self.mode,
                 "provider credentials are incomplete",
             )
+        if deadline <= time.monotonic():
+            raise RecognitionError(
+                ErrorKind.TIMEOUT, self.provider, self.mode, "deadline expired"
+            )
         sample = artifact.path.read_bytes()
         timestamp = str(int(time.time()))
         form = aiohttp.FormData()
@@ -197,7 +202,7 @@ class AcrcloudEngine:
                     )
         except RecognitionError:
             raise
-        except TimeoutError as error:
+        except (TimeoutError, aiohttp.ServerTimeoutError) as error:
             raise RecognitionError(
                 ErrorKind.TIMEOUT,
                 self.provider,

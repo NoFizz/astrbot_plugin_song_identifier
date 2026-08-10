@@ -92,6 +92,10 @@ class XfyunQbhEngine:
                 self.mode,
                 "provider credentials are incomplete",
             )
+        if deadline <= time.monotonic():
+            raise RecognitionError(
+                ErrorKind.TIMEOUT, self.provider, self.mode, "deadline expired"
+            )
         audio = artifact.path.read_bytes()
         if len(audio) > 2 * 1024 * 1024:
             raise RecognitionError(
@@ -116,10 +120,36 @@ class XfyunQbhEngine:
                         "HTTP authentication failed",
                         response.status,
                     )
+                if response.status == 429:
+                    raise RecognitionError(
+                        ErrorKind.RATE_LIMITED,
+                        self.provider,
+                        self.mode,
+                        "HTTP rate limit exceeded",
+                        response.status,
+                        True,
+                    )
+                if response.status >= 500:
+                    raise RecognitionError(
+                        ErrorKind.TEMPORARY_NETWORK,
+                        self.provider,
+                        self.mode,
+                        "upstream service error",
+                        response.status,
+                        True,
+                    )
+                if response.status < 200 or response.status >= 300:
+                    raise RecognitionError(
+                        ErrorKind.PROTOCOL_ERROR,
+                        self.provider,
+                        self.mode,
+                        "unexpected HTTP response",
+                        response.status,
+                    )
                 text = await response.text()
         except RecognitionError:
             raise
-        except TimeoutError as error:
+        except (TimeoutError, aiohttp.ServerTimeoutError) as error:
             raise RecognitionError(
                 ErrorKind.TIMEOUT, self.provider, self.mode, "request timed out"
             ) from error

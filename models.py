@@ -29,6 +29,7 @@ class SongInfo:
     mode: str = ""
     score: float | None = None
     acrid: str | None = None
+    provider_sid: str | None = None
     netease_id: str | None = None
     qq_songmid: str | None = None
 

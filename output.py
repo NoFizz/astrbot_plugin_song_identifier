@@ -60,7 +60,7 @@ class ResultFormatter:
     """将识别结果格式化为文本或图片。"""
 
     CARD_WIDTH = 480
-    CARD_HEIGHT = 620
+    CARD_HEIGHT = 576  # 压缩底部空白，封面占比升至 ~80%
     THUMB_SIZE = 440  # 封面尺寸：上方约占 3/4 区域
     COVER_MARGIN = 20  # 封面留白
 
@@ -184,7 +184,7 @@ class ResultFormatter:
 
         # 4) 底部文字区：歌名（较大）+ 歌手（较小），水平居中、垂直居中于剩余区域
         draw = ImageDraw.Draw(canvas)
-        font_title = _load_cjk_font(34, bold=True)
+        font_title = _load_cjk_font(36, bold=True)
         font_artist = _load_cjk_font(20)
 
         max_w = W - 80
@@ -199,7 +199,7 @@ class ResultFormatter:
 
         tb = draw.textbbox((0, 0), title, font=font_title)
         title_h = tb[3] - tb[1]
-        gap = 14
+        gap = 12
         if artist:
             ab = draw.textbbox((0, 0), artist, font=font_artist)
             artist_h = ab[3] - ab[1]
@@ -208,7 +208,8 @@ class ResultFormatter:
             total = title_h
 
         area_top = cy + self.THUMB_SIZE
-        top = area_top + (H - area_top - total) // 2
+        # -2：光学居中，避免小区域里文字显得偏下
+        top = area_top + (H - area_top - total) // 2 - 2
 
         title_w = draw.textlength(title, font=font_title)
         draw.text(

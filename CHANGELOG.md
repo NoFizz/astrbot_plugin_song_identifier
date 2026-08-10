@@ -14,7 +14,8 @@
 
 ### Fixed
 
-- 修复 ffprobe 时长探测失败：改用带 key 的 `key=value` 输出并按 key 解析，不再依赖 ffprobe 字段输出顺序（实测 mp4 输出顺序不固定，导致 `float('s16')` 崩溃、时长永远显示未知）。
+- 修复图片卡片生成失败：`Image.GaussianBlur` 应为 `ImageFilter.GaussianBlur`（Pillow 模糊滤镜在 `ImageFilter` 模块），此前导致有封面时图片生成抛异常并降级为文本。
+- 修复 `_crop_fill` 未缩放到目标尺寸：裁切后需 `resize` 铺满（cover 语义），否则背景与叠加层尺寸不匹配导致合成失败。
 - 恢复 `debug_log` 开关：重构时丢失了详细日志机制，现已在媒体归一化、识别结果、LLM 工具调用等关键步骤重新接入（受 `advanced.debug_log` 控制）。
 - 识别失败/引擎回退时输出各引擎失败原因（provider/mode/错误类型/错误码，脱敏），便于排查"为什么用了兜底引擎"。
 

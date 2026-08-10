@@ -172,12 +172,9 @@ class SongIdentifierPlugin(Star):
         if outcome.song is None:
             yield event.plain_result("未能识别出歌曲，请确认音频清晰且时长足够。")
             return
-        text = self.formatter.format_text(self._last_enriched)
-        link = self.formatter.format_link(self._last_enriched)
-        if link:
-            text = f"{text}\n{link}"
-        log.debug(f"LLM 工具返回文本: {text[:80]}")
-        yield event.plain_result(text)
+        # 成功：按 output.format 配置发送（文本/图片/卡片），与关键词直连一致
+        await self._send_result(event, outcome)
+        log.debug("LLM 工具结果已按配置发送")
 
     async def _send_result(self, event: AstrMessageEvent, outcome: RecognitionOutcome):
         """按配置输出识别结果：card / image / text。"""

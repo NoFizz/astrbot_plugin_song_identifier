@@ -9,7 +9,7 @@ import os
 import re
 
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .enrichment import EnrichedSong
 
@@ -143,7 +143,7 @@ class ResultFormatter:
         # 1) 背景：封面放大模糊铺满；无封面时深色渐变兜底
         if cover is not None:
             bg = self._crop_fill(cover.copy(), W, H).filter(
-                Image.GaussianBlur(radius=30)
+                ImageFilter.GaussianBlur(radius=30)
             )
             canvas = bg.convert("RGBA")
         else:
@@ -290,14 +290,16 @@ class ResultFormatter:
 
     @staticmethod
     def _crop_fill(img: Image.Image, w: int, h: int) -> Image.Image:
-        """按目标比例居中裁切。"""
+        """按目标比例居中裁切并缩放铺满（cover 语义）。"""
         if img.width / img.height > w / h:
             new_w = int(img.height * w / h)
             left = (img.width - new_w) // 2
-            return img.crop((left, 0, left + new_w, img.height))
-        new_h = int(img.width * h / w)
-        top = (img.height - new_h) // 2
-        return img.crop((0, top, img.width, top + new_h))
+            cropped = img.crop((left, 0, left + new_w, img.height))
+        else:
+            new_h = int(img.width * h / w)
+            top = (img.height - new_h) // 2
+            cropped = img.crop((0, top, img.width, top + new_h))
+        return cropped.resize((w, h), Image.LANCZOS)
 
     @staticmethod
     def _vertical_gradient(w: int, h: int, top: tuple, bottom: tuple) -> Image.Image:
@@ -324,7 +326,7 @@ class ResultFormatter:
             radius=radius,
             fill=(0, 0, 0, 80),
         )
-        shadow = shadow.filter(Image.GaussianBlur(16))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(16))
         canvas.alpha_composite(shadow, (x - pad + 4, y - pad + 8))
 
         mask = Image.new("L", (s, s), 0)

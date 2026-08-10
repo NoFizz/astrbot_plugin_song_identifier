@@ -22,7 +22,7 @@ def _enriched(netease_id=None, qq_songmid=None, cover=None):
         mode="music",
         cover_url=cover,
     )
-    return EnrichedSong(song=song, netease_id=netease_id, qq_songmid=qq_songmid)
+    return EnrichedSong(song=song, netease_id=netease_id, qq_songmid=qq_songmid, cover_url=cover)
 
 
 def _formatter(cfg=None):
@@ -104,6 +104,26 @@ async def test_build_image_returns_jpeg_bytes():
     assert image[:2] == b"\xff\xd8"  # JPEG 文件头
 
 
+@pytest.mark.asyncio
+async def test_build_image_with_cover_succeeds():
+    """有封面时图片生成必须成功（回归：GaussianBlur 误用 Image. 前缀导致失败）。"""
+    fmt = _formatter()
+    enriched = _enriched(cover="https://example.com/cover.jpg")
+
+    # 拦截 _load_cover 返回本地生成封面，避免真实网络请求
+    from PIL import Image
+
+    async def fake_load_cover(url):
+        return Image.new("RGB", (300, 300), (200, 80, 40))
+
+    fmt._load_cover = fake_load_cover  # type: ignore[assignment]
+
+    image = await fmt.build_image(enriched)
+
+    assert image is not None
+    assert image[:2] == b"\xff\xd8"
+
+
 def test_extract_accent_colors_returns_two_vivid_colors():
     """取色函数从纯色封面提取两个高鲜艳度颜色。"""
     fmt = _formatter()
@@ -132,3 +152,10 @@ def test_extract_accent_colors_fallback_on_failure():
     colors = fmt._extract_accent_colors(None)
     assert len(colors) == 2
     assert colors[0][0] >= 100  # 蓝色系兜底
+
+
+def test_crop_fill_scales_to_target_size():
+    """裁切后必须缩放到目标尺寸（cover 语义），保证合成尺寸一致。"""
+    img = Image.new("RGB", (300, 300), (200, 80, 40))
+    result = ResultFormatter._crop_fill(img, 600, 300)
+    assert result.size == (600, 300)

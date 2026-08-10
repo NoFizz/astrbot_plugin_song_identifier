@@ -117,6 +117,32 @@ def _record_event():
     return _Event(messages=[At(qq="bot-1"), Plain(text="识曲"), reply], message_str="识曲")
 
 
+@pytest.mark.asyncio
+async def test_identify_song_honors_image_output_format():
+    """LLM 工具路径也应尊重 output.format：图片模式下发送图片而非纯文本。"""
+    plugin = _make_plugin()
+    plugin.config = {"output": {"format": "图片", "link": False}}
+    plugin._last_enriched = EnrichedSong(
+        song=SongInfo(title="晴天", artist="周杰伦", provider="acrcloud", mode="music")
+    )
+
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = _Event(messages=[reply])
+
+    results = [r async for r in plugin.identify_song(ev, target="1")]
+
+    # 成功路径：结果直接发送给用户，工具无 yield 文本
+    assert results == []
+    # 应发送图片消息（chain 含 Image）
+    assert any(
+        r.get("type") == "chain" and any(
+            type(c).__name__ == "Image" for c in r.get("chain", [])
+        )
+        for r in ev.sent
+    )
+
+
 def test_plugin_instantiates_with_config_dict():
     """AstrBot 以 __init__(context, config) 实例化插件。
 

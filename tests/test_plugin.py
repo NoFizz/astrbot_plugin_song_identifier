@@ -157,6 +157,46 @@ async def test_on_message_full_success_text():
     assert ev.stopped is True
 
 
+def test_identify_song_tool_declares_required_target_param():
+    """识别工具必须声明必需参数 target。
+
+    AstrBot skills_like 两阶段工具模式下，阶段2 只下发 name + parameters（描述被剥掉）。
+    无参数工具在阶段2 的 parameters 为空、描述为空，LLM 无法确认该不该调用 → 放弃。
+    声明必需参数 target 后，阶段2 有参数 schema 可看，LLM 才能确认调用。
+    """
+    from inspect import getdoc
+
+    from astrbot_plugin_song_identifier.main import SongIdentifierPlugin
+
+    doc = getdoc(SongIdentifierPlugin.identify_song)
+    assert "target" in doc, "工具必须声明 target 参数（见 Args 段）"
+    assert "string" in doc, "target 参数必须带类型标注 string"
+
+
+def test_debug_log_toggle_controls_logging(monkeypatch):
+    """debug_log 开关必须生效：开启时输出详细日志，关闭时静默。"""
+    import astrbot_plugin_song_identifier.main as plugin_module
+
+    plugin_module._DEBUG_LOG = True
+    logged = []
+
+    class _FakeLogger:
+        def info(self, msg, *args):
+            logged.append(msg)
+
+    monkeypatch.setattr(plugin_module, "logger", _FakeLogger())
+    plugin_module._log_debug("详细日志测试")
+
+    assert len(logged) == 1
+
+    plugin_module._DEBUG_LOG = False
+    logged.clear()
+    plugin_module._log_debug("不应输出")
+
+    assert logged == []
+    plugin_module._DEBUG_LOG = False
+
+
 @pytest.mark.asyncio
 async def test_on_message_no_media_hint():
     plugin = _make_plugin()

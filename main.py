@@ -15,6 +15,19 @@ from .media import MediaExtractor, MediaMaterializer, TriggerDetector
 from .output import PLATFORM_PROVIDERS, ResultFormatter
 from .recognition import RecognitionOutcome, build_engines
 
+# 详细日志开关：由插件配置 advanced.debug_log 控制（Star 初始化时设置）
+_DEBUG_LOG = False
+
+
+def _log_debug(msg: str) -> None:
+    """输出详细分步日志；仅当插件配置开启 debug_log 时生效。
+
+    Args:
+        msg: 日志内容。
+    """
+    if _DEBUG_LOG:
+        logger.info(msg)
+
 
 class SongIdentifierPlugin(Star):
     """识别引用消息中的歌曲（OneBot v11）。"""
@@ -28,6 +41,8 @@ class SongIdentifierPlugin(Star):
         """
         super().__init__(context)
         self.config = config
+        global _DEBUG_LOG
+        _DEBUG_LOG = bool(config.get("advanced", {}).get("debug_log", False))
         self.detector = TriggerDetector(
             str(config.get("trigger", {}).get("keyword", "识曲") or "识曲")
         )
@@ -84,13 +99,23 @@ class SongIdentifierPlugin(Star):
 
         artifact = await self.materializer.materialize(media)
         if artifact is None:
+            logger.warning("媒体落地失败（无本地音频文件）")
             return RecognitionOutcome(song=None), False
         try:
+            try:
+                size = artifact.path.stat().st_size
+            except OSError:
+                size = 0
+            _log_debug(f"媒体已归一化: {artifact.path.name} ({size} bytes)")
             timeout = aiohttp.ClientTimeout(
                 total=float(self.config.get("advanced", {}).get("identify_timeout", 60))
             )
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 outcome = await self.identifier.identify(artifact, session)
+            _log_debug(
+                f"识别结果: song={'有' if outcome.song else '无'}, "
+                f"timed_out={outcome.timed_out}, errors={len(outcome.errors)}"
+            )
             if outcome.song is not None:
                 enriched = await self.enricher.enrich(outcome.song)
                 outcome.song = enriched.song
@@ -106,16 +131,18 @@ class SongIdentifierPlugin(Star):
             await artifact.cleanup()
 
     @filter.llm_tool(name="identify_song")
-    async def identify_song(self, event: AstrMessageEvent):
+    async def identify_song(self, event: AstrMessageEvent, target: str):
         """识别语音/视频/音频文件中的歌曲。
 
         当用户引用了（回复了）一条包含语音、视频或音频文件的消息，并询问
         这是什么歌、歌名是什么、BGM 是什么时，调用此工具进行歌曲识别。
-        媒体文件自动从用户引用的消息中获取，无需额外参数。
+        媒体文件自动从用户引用的消息中获取，target 参数仅用于触发工具调用，
+        可传任意非空字符串（如"识别"）。
 
         Args:
-            无需参数。
+            target(string): 要识别的媒体引用消息。传任意非空字符串即可，媒体自动从引用消息获取。
         """
+        _log_debug(f"LLM 工具被调用: target={target!r}")
         media = MediaExtractor.extract_media(event)
         if media is None:
             yield event.plain_result(

@@ -1098,144 +1098,10 @@ class QQMusicCardProvider:
             return None
 
 
-class KugouCardProvider:
-    """酷狗音乐卡片：custom 卡片（歌曲页链接 + 封面，试听用网易云外链兜底）。"""
-
-    SEARCH_URL = "https://msearch.kugou.com/api/v3/search/song"
-
-    async def build_music_segment(self, song: SongInfo) -> dict | None:
-        """搜索酷狗并构造 custom 卡片段。
-
-        Args:
-            song: 歌曲信息。
-
-        Returns:
-            CQ:music 段 dict；失败时返回 None。
-        """
-        query = f"{song.title or ''} {song.artist or ''}".strip()
-        if not query:
-            return None
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    self.SEARCH_URL,
-                    params={
-                        "format": "json",
-                        "keyword": query,
-                        "page": 1,
-                        "pagesize": 1,
-                    },
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 "
-                            "like Mac OS X)"
-                        ),
-                        "Referer": "https://m.kugou.com/",
-                    },
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                info = ((payload.get("data") or {}).get("info")) or []
-                if not info:
-                    return None
-                first = info[0]
-                song_hash = first.get("hash")
-                if not song_hash:
-                    return None
-                cover = (first.get("trans_param") or {}).get("union_cover") or ""
-                cover = cover.replace("{size}", "400") if cover else ""
-                return {
-                    "type": "music",
-                    "data": {
-                        "type": "custom",
-                        "url": f"https://www.kugou.com/song/#hash={song_hash}",
-                        "audio": _netease_outer_url(song) or "",
-                        "title": first.get("songname") or song.title or "",
-                        "image": cover,
-                        "singer": first.get("singername") or song.artist or "",
-                    },
-                }
-        except Exception as e:
-            logger.warning(f"[识曲] 酷狗卡片搜索失败: {e}")
-            return None
-
-
-class KuwoCardProvider:
-    """酷我音乐卡片：custom 卡片（歌曲页链接 + 封面，试听用网易云外链兜底）。"""
-
-    SEARCH_URL = "https://search.kuwo.cn/r.s"
-
-    async def build_music_segment(self, song: SongInfo) -> dict | None:
-        """搜索酷我并构造 custom 卡片段。
-
-        Args:
-            song: 歌曲信息。
-
-        Returns:
-            CQ:music 段 dict；失败时返回 None。
-        """
-        query = f"{song.title or ''} {song.artist or ''}".strip()
-        if not query:
-            return None
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    self.SEARCH_URL,
-                    params={
-                        "client": "kt",
-                        "all": query,
-                        "pn": 0,
-                        "rn": 1,
-                        "type": "kid",
-                        "uid": "794762570",
-                        "ver": "kwplayer_ar_9.2.2.1",
-                        "vipver": "1",
-                        "show_copyright_off": "1",
-                        "newver": "1",
-                        "ft": "music",
-                        "cluster": "0",
-                        "strategy": "2012",
-                        "encoding": "utf8",
-                        "rformat": "json",
-                    },
-                    headers={
-                        "User-Agent": NETEASE_HEADERS["User-Agent"],
-                        "Referer": "http://www.kuwo.cn/",
-                    },
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                items = payload.get("abslist") or []
-                if not items:
-                    return None
-                first = items[0]
-                rid = str(first.get("MUSICRID") or "").replace("MUSIC_", "")
-                if not rid:
-                    return None
-                pic = first.get("web_albumpic_short") or ""
-                cover = f"https://img1.kuwo.cn/star/albumcover/{pic}" if pic else ""
-                return {
-                    "type": "music",
-                    "data": {
-                        "type": "custom",
-                        "url": f"https://www.kuwo.cn/play_detail/{rid}",
-                        "audio": _netease_outer_url(song) or "",
-                        "title": first.get("NAME") or song.title or "",
-                        "image": cover,
-                        "singer": first.get("ARTIST") or song.artist or "",
-                    },
-                }
-        except Exception as e:
-            logger.warning(f"[识曲] 酷我卡片搜索失败: {e}")
-            return None
-
-
 # 配置下拉选项（中文标签）→ 音乐卡片平台 provider
 PLATFORM_PROVIDERS = {
     "网易云音乐": NeteaseCardProvider(),
     "QQ音乐": QQMusicCardProvider(),
-    "酷狗音乐": KugouCardProvider(),
-    "酷我音乐": KuwoCardProvider(),
 }
 
 
@@ -1580,7 +1446,7 @@ class SongIdentifierPlugin(Star):
             event.get_sender_id() if event.is_private_chat() else event.get_group_id()
         )
         target_key = "user_id" if event.is_private_chat() else "group_id"
-        for slot in ("primary", "secondary", "fallback"):
+        for slot in ("primary", "secondary"):
             label = (
                 _cfg(self.config, "output", "card_platforms", slot, default="") or ""
             )

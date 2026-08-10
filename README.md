@@ -49,18 +49,25 @@
 
 > ⚠️ 本插件**仅支持 OneBot v11（aiocqhttp）平台**，请确保你的协议端（如 LLBot、NapCat 等）以 OneBot v11 反向 WS 方式接入 AstrBot。
 
-**方式一：插件市场安装（推荐）**
+### 方法一：通过插件源安装（推荐）
 
-打开 AstrBot WebUI → 插件管理 → 插件市场，搜索「听歌识曲」或 `astrbot_plugin_song_identifier`，点击安装并启用。
+1. 打开 AstrBot WebUI → 插件管理 → 插件市场。
+2. 添加插件源（如尚未添加）：
+   - 源名称：`AstrBot Official Plugin Market`
+   - 源地址：`https://cloud-test.astrbot.app/api/v1/market/plugins.json`
+3. 在插件市场中搜索 **听歌识曲**（`astrbot_plugin_song_identifier`），点击安装。
+4. 等待安装完成，确认插件已启用。
 
-**方式二：GitHub 安装**
+### 方法二：GitHub 安装
 
 ```bash
 cd <AstrBot 根目录>/data/plugins
 git clone https://github.com/NoFizz/astrbot_plugin_song_identifier.git
 ```
 
-**方式三：手动安装**
+然后在 AstrBot WebUI → 插件管理 → 重载插件。
+
+### 方法三：手动安装
 
 将插件目录直接放入 AstrBot 的 `data/plugins/` 目录下，然后在 AstrBot WebUI → 插件管理 → 重载插件。
 

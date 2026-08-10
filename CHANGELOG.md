@@ -1,0 +1,40 @@
+# Changelog
+
+本项目的所有重要变更都会记录在此文件中。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [Unreleased]
+
+### Changed
+
+- 按官方 API 契约重构识别核心：ACRCloud 原生、讯飞 ACRCloud（原声/哼唱）、讯飞 qbh、ShazamIO 四类引擎独立实现，统一错误分类（无结果/配置/鉴权/限流/网络/协议/超时/取消）。
+- 原声与哼唱拆分为独立引擎档位：不再隐式"原声失败自动哼唱"，由用户按 首选→次选→备选 自行排列。
+- 默认识别片段从 30 秒改为 12 秒：符合 ACRCloud 官方"只处理前 12 秒"的边界，减小上传体积。
+- 媒体处理迁移至 AstrBot `data/temp` 目录，识别结束/失败/取消后统一清理临时工件。
+- 网易云/QQ 音乐增强与识别核心隔离：增强失败不影响识别结果，平台歌曲 ID 分平台存放（网易云/QQ 不再混用）。
+- 日志分级与脱敏：详细日志受 `debug_log` 开关控制，不输出密钥、authorization 与完整响应。
+
+### Added
+
+- 结构化识别错误 `RecognitionError` 与错误分类 `ErrorKind`。
+- 总 deadline 级联识别：超时/取消向下传播并清理子进程与临时文件。
+- 官方签名 golden vector 测试：ACRCloud HMAC-SHA1、讯飞 HMAC-SHA256 均与官方文档示例逐字节一致。
+- 配置契约测试：`_conf_schema.json` 与引擎标签映射一致性、默认值校验、凭据默认值安全检查。
+
+### Removed
+
+- 移除已弃用的 `@register` 装饰器（AstrBot v3.5.19 后自动识别 Star 类）。
+- 删除旧版 1475 行单文件 `main.py` 中的重复实现与旧版测试（行为契约已迁移至新模块测试）。
+
+### Security
+
+- 凭据仅保存在 AstrBot 本地配置文件，插件代码/日志/README 不含任何密钥。
+
+## [1.0.0] - 2026-08-10
+
+### Added
+
+- 引用语音/视频/音频文件消息识别歌曲。
+- 多引擎级联：ACRCloud、Shazam、讯飞开放平台/ACRCloud、讯飞开放平台/自研。
+- 网易云歌曲信息增强（封面/试听链接/歌曲 ID）。
+- 文本 / 图片卡片 / QQ 音乐卡片三种输出形式。
+- LLM 工具 `identify_song`：自然语言触发识别。

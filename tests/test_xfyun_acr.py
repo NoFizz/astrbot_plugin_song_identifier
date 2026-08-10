@@ -10,8 +10,24 @@ from aiohttp.test_utils import TestClient, TestServer
 from astrbot_plugin_song_identifier.main import (
     XfyunAcrEngine,
     build_xfyun_authorization,
-    parse_xfyun_acr_response,
 )
+
+
+def _xfyun_payload(inner: dict) -> dict:
+    """构造讯飞 ACRCloud 外层响应（text 为 base64 内层 JSON）。"""
+    return {
+        "header": {"code": 0, "message": "success", "sid": "s1"},
+        "payload": {
+            "output_text": {
+                "compress": "raw",
+                "encoding": "utf8",
+                "format": "json",
+                "seq": "0",
+                "status": "3",
+                "text": base64.b64encode(json.dumps(inner).encode()).decode(),
+            }
+        },
+    }
 
 
 def test_build_authorization_deterministic():
@@ -31,57 +47,24 @@ def test_build_authorization_deterministic():
     )
 
 
-def test_parse_success():
-    inner = {
-        "status": {"code": 0, "msg": "Success", "version": "1.0"},
-        "metadata": {
-            "music": [
-                {
-                    "title": "光的方向",
-                    "artists": [{"name": "张碧晨"}],
-                    "album": {"name": "光的方向"},
-                }
-            ]
-        },
-    }
-    payload = {
-        "header": {"code": 0, "message": "success", "sid": "s1"},
-        "payload": {
-            "output_text": {
-                "compress": "raw",
-                "encoding": "utf8",
-                "format": "json",
-                "seq": "0",
-                "status": "3",
-                "text": base64.b64encode(json.dumps(inner).encode()).decode(),
-            }
-        },
-    }
-    info = parse_xfyun_acr_response(payload)
-    assert info.title == "光的方向"
-    assert info.artist == "张碧晨"
-    assert info.source == "xfyun"
-
-
-def test_parse_header_error():
-    payload = {"header": {"code": 10107, "message": "error", "sid": "s1"}}
-    assert parse_xfyun_acr_response(payload) is None
-
-
-def test_parse_empty_text():
-    payload = {"header": {"code": 0}, "payload": {"output_text": {"text": ""}}}
-    assert parse_xfyun_acr_response(payload) is None
-
-
-@pytest.mark.asyncio
-async def test_identify_posts_json_with_mp3(monkeypatch):
-    # 模拟 ffmpeg 转换：直接生成一个假 mp3 文件
+def _make_engine(server, monkeypatch):
     fake_mp3_path = pathlib.Path(tempfile.gettempdir()) / "xfyun_fake_out.mp3"
 
     async def fake_to_mp3(wav_path):
         fake_mp3_path.write_bytes(b"FAKEMP3")
         return str(fake_mp3_path)
 
+    engine = XfyunAcrEngine(app_id="APP", api_key="AK", api_secret="SK")
+    engine.host = f"http://127.0.0.1:{server.port}"
+    monkeypatch.setattr(engine, "_to_mp3", fake_to_mp3)
+    tmp = pathlib.Path(tempfile.gettempdir()) / "fake_in.wav"
+    tmp.write_bytes(b"FAKEWAV")
+    return engine, tmp, fake_mp3_path
+
+
+@pytest.mark.asyncio
+async def test_identify_posts_json_with_mp3(monkeypatch):
+    """原声识别：请求走 acr_music + music 端点，成功返回结果并清理 mp3。"""
     received = {}
 
     async def handler(request):
@@ -92,30 +75,12 @@ async def test_identify_posts_json_with_mp3(monkeypatch):
         audio = body["payload"]["data"]["audio"]
         received["audio_decoded"] = base64.b64decode(audio).decode()
         return web.json_response(
-            {
-                "header": {"code": 0, "message": "success", "sid": "s1"},
-                "payload": {
-                    "output_text": {
-                        "compress": "raw",
-                        "encoding": "utf8",
-                        "format": "json",
-                        "seq": "0",
-                        "status": "3",
-                        "text": base64.b64encode(
-                            json.dumps(
-                                {
-                                    "status": {"code": 0, "msg": "Success"},
-                                    "metadata": {
-                                        "music": [
-                                            {"title": "T", "artists": [{"name": "A"}]}
-                                        ]
-                                    },
-                                }
-                            ).encode()
-                        ).decode(),
-                    }
-                },
-            }
+            _xfyun_payload(
+                {
+                    "status": {"code": 0, "msg": "Success"},
+                    "metadata": {"music": [{"title": "T", "artists": [{"name": "A"}]}]},
+                }
+            )
         )
 
     app = web.Application()
@@ -124,18 +89,98 @@ async def test_identify_posts_json_with_mp3(monkeypatch):
     client = TestClient(server)
     await client.start_server()
     try:
-        engine = XfyunAcrEngine(app_id="APP", api_key="AK", api_secret="SK")
-        engine.host = f"http://127.0.0.1:{server.port}"
-        monkeypatch.setattr(engine, "_to_mp3", fake_to_mp3)
-        tmp = pathlib.Path(tempfile.gettempdir()) / "fake_in.wav"
-        tmp.write_bytes(b"FAKEWAV")
+        engine, tmp, fake_mp3_path = _make_engine(server, monkeypatch)
         async with aiohttp.ClientSession() as session:
             info = await engine.identify(str(tmp), session)
         assert info is not None and info.title == "T"
+        assert info.source == "xfyun"
         assert received["app_id"] == "APP"
         assert received["mode"] == "music"
         assert received["encoding"] == "lame"
         assert received["audio_decoded"] == "FAKEMP3"
         assert not fake_mp3_path.exists()  # mp3 临时文件上传后必须清理
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_identify_falls_back_to_humming(monkeypatch):
+    """原声识别无结果 → 自动请求哼唱端点（s9884ba49, acr_humming）并返回哼唱结果。"""
+    calls = []
+
+    async def music_handler(request):
+        calls.append("music")
+        body = await request.json()
+        assert body["parameter"]["acr_music"]["mode"] == "music"
+        # 原声无结果（metadata.music 为空）
+        return web.json_response(
+            _xfyun_payload(
+                {"status": {"code": 0, "msg": "Success"}, "metadata": {"music": []}}
+            )
+        )
+
+    async def humming_handler(request):
+        calls.append("humming")
+        body = await request.json()
+        assert body["parameter"]["acr_humming"]["mode"] == "humming"
+        return web.json_response(
+            _xfyun_payload(
+                {
+                    "status": {"code": 0, "msg": "Success"},
+                    "metadata": {
+                        "humming": [
+                            {
+                                "title": "最长的电影",
+                                "artists": [{"name": "周杰伦"}],
+                                "album": {"name": "我很忙"},
+                                "score": 0.96,
+                            }
+                        ]
+                    },
+                }
+            )
+        )
+
+    app = web.Application()
+    app.router.add_post("/v1/private/s29ebee0d", music_handler)
+    app.router.add_post("/v1/private/s9884ba49", humming_handler)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        engine, tmp, _ = _make_engine(server, monkeypatch)
+        async with aiohttp.ClientSession() as session:
+            info = await engine.identify(str(tmp), session)
+        assert calls == ["music", "humming"]
+        assert info is not None
+        assert info.title == "最长的电影"
+        assert info.artist == "周杰伦"
+        assert info.album == "我很忙"
+        assert info.source == "xfyun"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_identify_both_modes_no_result(monkeypatch):
+    """原声与哼唱均无结果 → 返回 None（交给下一引擎）。"""
+    async def handler(request):
+        return web.json_response(
+            _xfyun_payload(
+                {"status": {"code": 0, "msg": "Success"}, "metadata": {}}
+            )
+        )
+
+    app = web.Application()
+    app.router.add_post("/v1/private/s29ebee0d", handler)
+    app.router.add_post("/v1/private/s9884ba49", handler)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        engine, tmp, _ = _make_engine(server, monkeypatch)
+        async with aiohttp.ClientSession() as session:
+            info = await engine.identify(str(tmp), session)
+        assert info is None
     finally:
         await client.close()

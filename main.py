@@ -341,14 +341,23 @@ def build_acrcloud_signature(
     return base64.b64encode(digest).decode()
 
 
-def parse_acrcloud_response(payload: dict) -> SongInfo | None:
-    """解析 ACRCloud 格式识别响应，返回歌曲信息；无结果返回 None。"""
+def parse_acrcloud_response(payload: dict, music_key: str = "music") -> SongInfo | None:
+    """解析 ACRCloud 格式识别响应，返回歌曲信息；无结果返回 None。
+
+    Args:
+        payload: ACRCloud 响应 dict。
+        music_key: 结果数组键名，"music"（原声识别）或 "humming"（哼唱识别）；
+            两者字段结构相同（title/artists/album）。
+
+    Returns:
+        歌曲信息；无结果时返回 None。
+    """
     if payload.get("status", {}).get("code") != 0:
         return None
-    music = (payload.get("metadata") or {}).get("music") or []
-    if not music:
+    results = (payload.get("metadata") or {}).get(music_key) or []
+    if not results:
         return None
-    first = music[0]
+    first = results[0]
     if not first.get("title"):
         return None
     artists = ", ".join(
@@ -458,29 +467,16 @@ def build_xfyun_authorization(
     return base64.b64encode(authorization_origin.encode()).decode()
 
 
-def parse_xfyun_acr_response(payload: dict) -> SongInfo | None:
-    """解析讯飞 ACRCloud 音乐识别响应（内层为 ACRCloud 格式）。"""
-    if payload.get("header", {}).get("code") != 0:
-        return None
-    text_b64 = (((payload.get("payload") or {}).get("output_text")) or {}).get(
-        "text", ""
-    )
-    if not text_b64:
-        return None
-    try:
-        inner = json.loads(base64.b64decode(text_b64))
-    except Exception:
-        return None
-    info = parse_acrcloud_response(inner)
-    if info is not None:
-        info.source = "xfyun"
-    return info
-
-
 class XfyunAcrEngine:
-    """讯飞 ACRCloud 音乐识别引擎（国内直连，要求 mp3 音频）。"""
+    """讯飞开放平台/ACRCloud 引擎（国内直连，要求 mp3 音频）。
 
-    ENDPOINT = "/v1/private/s29ebee0d"
+    按官方文档（xfyun.cn/doc/voiceservice/music_recognition）实现两级识别：
+    先调用音乐识别端点（s29ebee0d，原声识别）；识别不出时自动调用哼唱
+    识别端点（s9884ba49，旋律识别）；仍无结果则返回 None 交给下一引擎。
+    """
+
+    MUSIC_ENDPOINT = "/v1/private/s29ebee0d"
+    HUMMING_ENDPOINT = "/v1/private/s9884ba49"
     DEFAULT_HOST = "cn-east-1.api.xf-yun.com"
 
     def __init__(self, app_id: str, api_key: str, api_secret: str):
@@ -499,61 +495,99 @@ class XfyunAcrEngine:
         if not mp3_path:
             return None
         try:
-            date = formatdate(usegmt=True)
-            authorization = build_xfyun_authorization(
-                self.api_key, self.api_secret, self.host, self.ENDPOINT, date
-            )
-            url = (
-                f"https://{self.host}{self.ENDPOINT}"
-                f"?authorization={quote(authorization)}"
-                f"&host={self.host}&date={quote(date)}"
-            )
-            if self.host.startswith("http"):
-                url = f"{self.host}{self.ENDPOINT}?authorization={quote(authorization)}&host={self.host}&date={quote(date)}"
-            with open(mp3_path, "rb") as f:
-                audio_b64 = base64.b64encode(f.read()).decode()
-            body = {
-                "header": {"app_id": self.app_id, "status": 3},
-                "parameter": {
-                    "acr_music": {
-                        "mode": "music",
-                        "output_text": {
-                            "encoding": "utf8",
-                            "compress": "raw",
-                            "format": "json",
-                        },
-                    }
-                },
-                "payload": {
-                    "data": {
-                        "encoding": "lame",
-                        "sample_rate": 16000,
-                        "channels": 1,
-                        "bit_depth": 16,
-                        "status": 3,
-                        "audio": audio_b64,
-                        "frame_size": 0,
-                    }
-                },
-            }
-            async with session.post(url, json=body) as resp:
-                text = await resp.text()
-            _log_debug(
-                f"[识曲] 讯飞音乐识别请求完成: HTTP {resp.status}, "
-                f"{len(text)} bytes"
-            )
-            _log_debug(f"[识曲] 讯飞音乐识别响应: {text[:200]}")
-            try:
-                payload = json.loads(text)
-            except ValueError:
-                logger.warning(f"讯飞音乐识别响应非 JSON: {text[:200]}")
-                return None
-            return parse_xfyun_acr_response(payload)
+            # 一级：原声识别（听歌识曲）
+            info = await self._request_identify(mp3_path, session, "music")
+            if info is not None:
+                return info
+            # 二级：哼唱识别（旋律匹配）
+            _log_debug("[识曲] 讯飞原声识别无结果，尝试讯飞哼唱识别")
+            return await self._request_identify(mp3_path, session, "humming")
         finally:
             try:
                 os.remove(mp3_path)
             except OSError:
                 pass
+
+    async def _request_identify(
+        self, mp3_path: str, session, mode: str
+    ) -> SongInfo | None:
+        """调用讯飞 ACRCloud 识别端点（music 原声 / humming 哼唱）。
+
+        Args:
+            mp3_path: 16k 单声道 mp3 文件路径。
+            session: aiohttp.ClientSession。
+            mode: "music" 或 "humming"。
+
+        Returns:
+            歌曲信息；无结果或请求失败时返回 None。
+        """
+        endpoint = (
+            self.MUSIC_ENDPOINT if mode == "music" else self.HUMMING_ENDPOINT
+        )
+        service_key = "acr_music" if mode == "music" else "acr_humming"
+        date = formatdate(usegmt=True)
+        authorization = build_xfyun_authorization(
+            self.api_key, self.api_secret, self.host, endpoint, date
+        )
+        url = (
+            f"https://{self.host}{endpoint}"
+            f"?authorization={quote(authorization)}"
+            f"&host={self.host}&date={quote(date)}"
+        )
+        if self.host.startswith("http"):
+            url = f"{self.host}{endpoint}?authorization={quote(authorization)}&host={self.host}&date={quote(date)}"
+        with open(mp3_path, "rb") as f:
+            audio_b64 = base64.b64encode(f.read()).decode()
+        body = {
+            "header": {"app_id": self.app_id, "status": 3},
+            "parameter": {
+                service_key: {
+                    "mode": mode,
+                    "output_text": {
+                        "encoding": "utf8",
+                        "compress": "raw",
+                        "format": "json",
+                    },
+                }
+            },
+            "payload": {
+                "data": {
+                    "encoding": "lame",
+                    "sample_rate": 16000,
+                    "channels": 1,
+                    "bit_depth": 16,
+                    "status": 3,
+                    "audio": audio_b64,
+                    "frame_size": 0,
+                }
+            },
+        }
+        async with session.post(url, json=body) as resp:
+            text = await resp.text()
+        _log_debug(
+            f"[识曲] 讯飞{mode}识别请求完成: HTTP {resp.status}, "
+            f"{len(text)} bytes"
+        )
+        _log_debug(f"[识曲] 讯飞{mode}识别响应: {text[:200]}")
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            logger.warning(f"讯飞{mode}识别响应非 JSON: {text[:200]}")
+            return None
+        if payload.get("header", {}).get("code") != 0:
+            return None
+        text_b64 = (payload.get("payload") or {}).get("output_text", {}).get("text", "")
+        if not text_b64:
+            return None
+        try:
+            inner = json.loads(base64.b64decode(text_b64))
+        except Exception:
+            return None
+        # 原声识别结果在 metadata.music，哼唱识别结果在 metadata.humming
+        info = parse_acrcloud_response(inner, music_key="music" if mode == "music" else "humming")
+        if info is not None:
+            info.source = "xfyun"
+        return info
 
     async def _to_mp3(self, wav_path: str) -> str | None:
         """wav → 16k 单声道 mp3（lame），供讯飞接口使用。"""
@@ -824,12 +858,12 @@ def build_engines(config: dict) -> SongIdentifier:
         ),
         "shazam": ShazamEngine(),
     }
-    # 配置下拉选项（中文标签）→ 引擎标识；"无"或未知标签视为留空跳过
+    # 配置下拉选项（中文标签）→ 引擎标识；"留空"或未知标签视为跳过
     label_to_key = {
         "ACRCloud": "acrcloud",
-        "讯飞开放平台 ACRCloud": "xfyun",
-        "讯飞开放平台": "xfyun_humming",
         "Shazam": "shazam",
+        "讯飞开放平台/ACRCloud": "xfyun",
+        "讯飞开放平台/自研": "xfyun_humming",
     }
 
     engines = []

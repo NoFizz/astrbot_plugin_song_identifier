@@ -1,8 +1,54 @@
+import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from astrbot.api.message_components import At, File, Record, Reply, Video
+
+# 媒体源文件大小上限（100MB）：阻止超大文件耗尽下载带宽与磁盘
+_MAX_SOURCE_BYTES = 100 * 1024 * 1024
+
+
+async def run_ffmpeg(args: list[str], timeout: float = 60.0) -> int:
+    """运行 ffmpeg/ffprobe 子进程，超时/取消时正确回收。
+
+    取消或超时时先 terminate（SIGTERM），短暂等待后 kill（SIGKILL），
+    再 await 回收，避免遗留 CPU 进程与 Windows 上无法删除的临时文件。
+
+    Args:
+        args: 完整命令行参数列表（不含可执行名）。
+        timeout: 子进程 wall-clock 超时（秒）。
+
+    Returns:
+        子进程 returncode。
+
+    Raises:
+        asyncio.CancelledError: 外部取消（子进程已被终止回收）。
+        asyncio.TimeoutError: 超过 timeout（子进程已被终止回收）。
+    """
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.wait()
+        raise
+    except asyncio.CancelledError:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            process.kill()
+            await process.wait()
+        raise
 
 
 class TriggerDetector:
@@ -86,7 +132,8 @@ class MediaMaterializer:
     """Materialize and normalize input media for recognition providers."""
 
     def __init__(self, max_seconds: int = 12, temp_dir: Path | None = None):
-        self.max_seconds = max(1, int(max_seconds))
+        # 硬上限 12 秒：ACRCloud 官方只处理前 12 秒，超长片段无意义且浪费带宽
+        self.max_seconds = max(1, min(12, int(max_seconds)))
         if temp_dir is not None:
             self.temp_dir = Path(temp_dir)
         elif get_astrbot_temp_path is not None:
@@ -129,8 +176,6 @@ class MediaMaterializer:
         使用带 key 的输出（key=value 行），按 key 精确取值，
         不依赖 ffprobe 的字段输出顺序（实测 mp4 输出顺序不固定）。
         """
-        import asyncio
-
         from . import log
 
         try:
@@ -146,7 +191,7 @@ class MediaMaterializer:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await process.communicate()
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
             if process.returncode != 0:
                 log.warning(f"ffprobe 探测失败: returncode={process.returncode}")
                 return None
@@ -167,7 +212,7 @@ class MediaMaterializer:
                 sample_format=values.get("sample_fmt", ""),
                 size_bytes=path.stat().st_size,
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, asyncio.TimeoutError) as error:
             log.warning(f"ffprobe 探测异常: {error}")
             return None
 
@@ -195,46 +240,52 @@ class MediaMaterializer:
         if not path or not Path(path).exists():
             log.warning(f"媒体来源不存在: {path!r}")
             return None
-        log.debug(f"媒体来源就绪: {path}")
+        # 输入大小上限：防止超大媒体耗尽下载带宽与磁盘
+        try:
+            size = Path(path).stat().st_size
+        except OSError:
+            size = 0
+        if size > _MAX_SOURCE_BYTES:
+            log.warning(
+                f"媒体来源过大: {size} bytes（上限 {_MAX_SOURCE_BYTES} bytes），拒绝处理"
+            )
+            return None
+        log.debug(f"媒体来源就绪: {path} ({size} bytes)")
         return Path(path)
 
     async def _convert(self, source: Path, output: Path) -> MediaArtifact | None:
-        import asyncio
-
         from . import log
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(source),
-                "-t",
-                str(self.max_seconds),
-                "-acodec",
-                "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                str(output),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            code = await run_ffmpeg(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-y",
+                    "-i",
+                    str(source),
+                    "-t",
+                    str(self.max_seconds),
+                    "-acodec",
+                    "pcm_s16le",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    str(output),
+                ],
+                timeout=60,
             )
-        except OSError as error:
-            log.warning(f"无法启动 ffmpeg: {error}")
-            return None
-
-        try:
-            await process.wait()
         except asyncio.CancelledError:
             log.warning("ffmpeg 转换被取消，清理输出")
-            process.kill()
-            await process.wait()
             output.unlink(missing_ok=True)
             raise
-        if process.returncode != 0 or not output.exists():
-            log.warning(f"ffmpeg 转换失败: returncode={process.returncode}")
+        except asyncio.TimeoutError:
+            log.warning("ffmpeg 转换超时，清理输出")
+            output.unlink(missing_ok=True)
+            return None
+        if code != 0 or not output.exists():
+            log.warning(f"ffmpeg 转换失败: returncode={code}")
             output.unlink(missing_ok=True)
             return None
         return MediaArtifact(path=output, created_paths=(output,))

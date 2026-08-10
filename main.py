@@ -17,6 +17,9 @@ from .media import MediaExtractor, MediaMaterializer, TriggerDetector
 from .output import PLATFORM_PROVIDERS, ResultFormatter
 from .recognition import RecognitionOutcome, build_engines
 
+# 全局并发闸门：同时进行的识别请求上限，防止下载带宽/磁盘/ffmpeg/第三方配额被耗尽
+_MAX_CONCURRENT_IDENTIFY = 4
+
 
 @dataclass(slots=True)
 class IdentificationResult:
@@ -43,9 +46,12 @@ class SongIdentifierPlugin(Star):
             context: AstrBot Star 上下文。
             config: 插件配置 dict。
         """
+        import asyncio
+
         super().__init__(context)
         self.config = config
         log.set_debug(bool(config.get("advanced", {}).get("debug_log", False)))
+        self._semaphore = asyncio.Semaphore(_MAX_CONCURRENT_IDENTIFY)
         self.detector = TriggerDetector(
             str(config.get("trigger", {}).get("keyword", "识曲") or "识曲")
         )
@@ -57,6 +63,18 @@ class SongIdentifierPlugin(Star):
             log.warning("未配置任何识别引擎，请到插件配置中设置 首选/次选/备选 引擎。")
         self.enricher = SongEnricher()
         self.formatter = ResultFormatter(config)
+
+    async def _run_identify(self, media) -> IdentificationResult:
+        """在并发闸门内执行识别，避免资源被无限请求耗尽。
+
+        Args:
+            media: 消息段（Record/Video/File）。
+
+        Returns:
+            请求级识别结果。
+        """
+        async with self._semaphore:
+            return await self._identify(media)
 
     @filter.event_message_type(EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -78,7 +96,7 @@ class SongIdentifierPlugin(Star):
         log.debug(f"媒体段类型: {type(media).__name__}")
 
         try:
-            result = await self._identify(media)
+            result = await self._run_identify(media)
             if not result.materialize_ok:
                 log.warning("媒体落地失败，提示用户")
                 await event.send(event.plain_result("媒体文件获取失败，请重试。"))
@@ -180,7 +198,7 @@ class SongIdentifierPlugin(Star):
                 "语音/视频/音频文件的消息。"
             )
             return
-        result = await self._identify(media)
+        result = await self._run_identify(media)
         if not result.materialize_ok:
             yield event.plain_result("媒体文件处理失败，请重试。")
             return

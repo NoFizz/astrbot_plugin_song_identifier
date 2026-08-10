@@ -5,6 +5,7 @@ from astrbot_plugin_song_identifier.media import (
     MediaArtifact,
     MediaExtractor,
     MediaMaterializer,
+    run_ffmpeg,
 )
 
 from astrbot.api.message_components import Plain, Record, Reply
@@ -58,6 +59,86 @@ def test_materializer_defaults_to_acrcloud_safe_duration():
     assert MediaMaterializer().max_seconds == 12
 
 
+def test_materializer_clamps_max_seconds_to_12():
+    """媒体时长硬上限 12 秒（ACRCloud 官方只处理前 12 秒）。"""
+    assert MediaMaterializer(max_seconds=99).max_seconds == 12
+    assert MediaMaterializer(max_seconds=0).max_seconds == 1
+    assert MediaMaterializer(max_seconds=-5).max_seconds == 1
+
+
+@pytest.mark.asyncio
+async def test_run_ffmpeg_timeout_terminates_process(monkeypatch):
+    """run_ffmpeg 超时必须 terminate 并回收子进程，不遗留。"""
+    import asyncio
+
+    class FakeProcess:
+        def __init__(self):
+            self.terminated = False
+            self.killed = False
+
+        async def wait(self):
+            if self.terminated or self.killed:
+                return 0  # 被终止后回收立即完成
+            await asyncio.sleep(10)  # 永不结束，触发超时
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    fake = FakeProcess()
+
+    async def fake_create(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await run_ffmpeg(["ffmpeg", "-y"], timeout=0.05)
+
+    assert fake.terminated is True
+
+
+@pytest.mark.asyncio
+async def test_run_ffmpeg_cancellation_terminates_process(monkeypatch):
+    """外部取消 run_ffmpeg 必须 terminate 并回收子进程。"""
+    import asyncio
+
+    class FakeProcess:
+        def __init__(self):
+            self.terminated = False
+            self.killed = False
+
+        async def wait(self):
+            if self.terminated or self.killed:
+                return 0
+            await asyncio.sleep(10)
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    fake = FakeProcess()
+
+    async def fake_create(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create)
+
+    task = asyncio.create_task(run_ffmpeg(["ffmpeg", "-y"], timeout=30))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert fake.terminated is True
+
+
 @pytest.mark.asyncio
 async def test_materializer_passes_duration_and_audio_shape_to_ffmpeg(
     tmp_path, monkeypatch
@@ -70,8 +151,10 @@ async def test_materializer_passes_duration_and_audio_shape_to_ffmpeg(
         returncode = 0
 
         async def wait(self):
+            # 模拟真实 asyncio.subprocess.Process.wait：返回 returncode
             output = Path(calls[-1][-1])
             output.write_bytes(b"wav")
+            return self.returncode
 
         async def communicate(self):
             # ffprobe 输出: duration / sample_rate / channels / sample_fmt

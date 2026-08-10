@@ -97,10 +97,13 @@ class _Event:
 
 
 def _make_plugin(identifier=None, formatter=None):
+    import asyncio
+
     from astrbot_plugin_song_identifier.media import TriggerDetector
 
     plugin = SongIdentifierPlugin.__new__(SongIdentifierPlugin)
     plugin.config = {"output": {"link": True}}
+    plugin._semaphore = asyncio.Semaphore(4)
     plugin.detector = TriggerDetector("识曲")
     plugin.materializer = _FakeMaterializer()
     plugin.identifier = identifier or _FakeIdentifier(

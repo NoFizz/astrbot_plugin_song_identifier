@@ -289,36 +289,39 @@ class XfyunAcrEngine:
     async def _to_mp3(self, source):
         """Create a real 16 kHz mono MP3 for the Xfyun lame payload."""
 
+        from ..media import run_ffmpeg
+
         output = (
             Path(tempfile.gettempdir())
             / f"xfyun_{os.getpid()}_{os.urandom(8).hex()}.mp3"
         )
         try:
-            process = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(source),
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-codec:a",
-                "libmp3lame",
-                "-b:a",
-                "64k",
-                str(output),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            code = await run_ffmpeg(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-y",
+                    "-i",
+                    str(source),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-codec:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "64k",
+                    str(output),
+                ],
+                timeout=60,
             )
-            await process.wait()
-            if process.returncode != 0 or not output.exists():
-                output.unlink(missing_ok=True)
-                return None
-            return output
         except asyncio.CancelledError:
             output.unlink(missing_ok=True)
             raise
-        except OSError:
+        except asyncio.TimeoutError:
             output.unlink(missing_ok=True)
             return None
+        if code != 0 or not output.exists():
+            output.unlink(missing_ok=True)
+            return None
+        return output

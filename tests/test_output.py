@@ -1,6 +1,9 @@
 """输出层测试：文本/图片/卡片与平台链接隔离。"""
 
+import io
+
 import pytest
+from PIL import Image
 from astrbot_plugin_song_identifier.enrichment import EnrichedSong
 from astrbot_plugin_song_identifier.models import SongInfo
 from astrbot_plugin_song_identifier.output import (
@@ -99,3 +102,33 @@ async def test_build_image_returns_jpeg_bytes():
 
     assert image is not None
     assert image[:2] == b"\xff\xd8"  # JPEG 文件头
+
+
+def test_extract_accent_colors_returns_two_vivid_colors():
+    """取色函数从纯色封面提取两个高鲜艳度颜色。"""
+    fmt = _formatter()
+
+    # 纯红色封面
+    img = Image.new("RGB", (100, 100), (200, 30, 30))
+    colors = fmt._extract_accent_colors(img)
+    assert len(colors) == 2
+    assert all(len(c) == 3 for c in colors)
+    # 第一色应为红色系（R 通道显著高于 G/B）
+    assert colors[0][0] > colors[0][1] + 50
+
+
+def test_extract_accent_colors_lifts_dark_colors():
+    """暗色封面提取后颜色应被提亮（避免渐变线过暗）。"""
+    fmt = _formatter()
+    img = Image.new("RGB", (100, 100), (40, 30, 20))
+    colors = fmt._extract_accent_colors(img)
+    # 提亮后至少一个通道明显大于原色
+    assert any(c[0] > 60 for c in colors) or any(c[1] > 60 for c in colors)
+
+
+def test_extract_accent_colors_fallback_on_failure():
+    """异常输入（如空图像）回退到默认蓝紫色。"""
+    fmt = _formatter()
+    colors = fmt._extract_accent_colors(None)
+    assert len(colors) == 2
+    assert colors[0][0] >= 100  # 蓝色系兜底

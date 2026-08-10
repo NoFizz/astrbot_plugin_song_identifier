@@ -13,10 +13,14 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PLUGINS_DIR = Path(__file__).resolve().parents[2]
-ASTRBOT_ROOT = Path(__file__).resolve().parents[4]
+PACKAGE_PARENT = PROJECT_ROOT.parent
+ASTRBOT_ROOT = next(
+    parent
+    for parent in Path(__file__).resolve().parents
+    if (parent / "astrbot").is_dir()
+)
 
-for candidate in (PROJECT_ROOT, PLUGINS_DIR, ASTRBOT_ROOT):
+for candidate in (ASTRBOT_ROOT, PROJECT_ROOT, PACKAGE_PARENT):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)

@@ -122,9 +122,6 @@ async def test_identify_song_honors_image_output_format():
     """LLM 工具路径也应尊重 output.format：图片模式下发送图片而非纯文本。"""
     plugin = _make_plugin()
     plugin.config = {"output": {"format": "图片", "link": False}}
-    plugin._last_enriched = EnrichedSong(
-        song=SongInfo(title="晴天", artist="周杰伦", provider="acrcloud", mode="music")
-    )
 
     record = Record(file="x.amr")
     reply = Reply(id="1", chain=[record])
@@ -201,6 +198,31 @@ def test_identify_song_tool_declares_required_target_param():
     doc = getdoc(SongIdentifierPlugin.identify_song)
     assert "target" in doc, "工具必须声明 target 参数（见 Args 段）"
     assert "string" in doc, "target 参数必须带类型标注 string"
+
+
+def test_plugin_has_no_shared_last_enriched_state():
+    """插件实例不得持有共享的 _last_enriched 字段（并发串结果风险）。"""
+    plugin = _make_plugin()
+    assert not hasattr(plugin, "_last_enriched")
+
+
+@pytest.mark.asyncio
+async def test_identify_returns_request_local_enriched():
+    """_identify 必须返回请求级 enriched，而非写入实例共享字段。"""
+    from astrbot_plugin_song_identifier.media import MediaExtractor
+
+    plugin = _make_plugin()
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = _Event(messages=[reply])
+
+    result = await plugin._identify(media=MediaExtractor.extract_media(ev))
+
+    # 结果应包含请求级 enriched
+    assert result.enriched is not None
+    assert result.enriched.song.title == "晴天"
+    # 插件实例不应存有任何结果状态
+    assert not hasattr(plugin, "_last_enriched")
 
 
 @pytest.mark.asyncio

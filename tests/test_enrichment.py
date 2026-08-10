@@ -6,13 +6,16 @@ from astrbot_plugin_song_identifier.models import SongInfo
 
 
 class _FakeClient:
-    """httpx.AsyncClient 的响应替身。"""
+    """httpx.AsyncClient 的响应替身，支持按 URL 路由不同响应。"""
 
-    def __init__(self, status_code=200, payload=None):
+    def __init__(self, status_code=200, payload=None, urls=None):
         self._status_code = status_code
         self._payload = payload
+        self._urls = urls or {}
 
     async def get(self, url, params=None, headers=None):
+        if url in self._urls:
+            return _FakeResponse(self._status_code, self._urls[url])
         return _FakeResponse(self._status_code, self._payload)
 
     async def __aenter__(self):
@@ -122,3 +125,50 @@ def test_enriched_song_without_ids_has_no_links():
 
     assert enriched.netease_url is None
     assert enriched.qq_url is None
+
+
+def _qq_hit(songname="花の塔", songmid="003abc"):
+    return {
+        "data": {"song": {"list": [{"songname": songname, "songmid": songmid}]}}
+    }
+
+
+@pytest.mark.asyncio
+async def test_enrich_fills_qq_songmid_when_title_matches(monkeypatch):
+    from astrbot_plugin_song_identifier.enrichment import _QQ_SEARCH_URL
+
+    song = _song()
+    enricher = SongEnricher()
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(
+            payload=_netease_hit(),
+            urls={_QQ_SEARCH_URL: _qq_hit()},
+        ),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    assert enriched.qq_songmid == "003abc"
+    assert enriched.netease_id == "123456"
+
+
+@pytest.mark.asyncio
+async def test_enrich_skips_qq_when_title_mismatch(monkeypatch):
+    from astrbot_plugin_song_identifier.enrichment import _QQ_SEARCH_URL
+
+    song = _song()
+    enricher = SongEnricher()
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(
+            payload=_netease_hit(),
+            urls={_QQ_SEARCH_URL: _qq_hit(songname="完全不同的歌")},
+        ),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    # 标题不匹配：QQ songmid 为空，但网易云增强不受影响
+    assert enriched.qq_songmid is None
+    assert enriched.netease_id == "123456"

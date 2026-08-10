@@ -20,6 +20,7 @@ _NETEASE_HEADERS = {
     "Cookie": "appver=2.0.2",
 }
 _NETEASE_SEARCH_URL = "https://music.163.com/api/search/get/web"
+_QQ_SEARCH_URL = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
 
 
 @dataclass(slots=True)
@@ -79,15 +80,75 @@ class SongEnricher:
                 cover = None
                 if song_id:
                     cover = await self._fetch_cover(client, song_id)
+                qq_songmid = await self._fetch_qq_songmid(client, song)
                 return EnrichedSong(
                     song=song,
                     netease_id=song_id or None,
+                    qq_songmid=qq_songmid,
                     cover_url=cover or None,
                 )
         except Exception as error:
             # 增强失败不阻塞识别核心：返回空增强
             log.warning(f"网易云增强失败: {error}")
             return EnrichedSong(song=song)
+
+    async def _fetch_qq_songmid(self, client, song: SongInfo) -> str | None:
+        """按歌名+歌手搜索 QQ 音乐，返回 songmid（带标题/歌手校验）。
+
+        QQ 搜索为非官方接口，失败或匹配不符时返回 None（卡片回退，不阻塞）。
+        """
+        from . import log
+
+        try:
+            resp = await client.get(
+                _QQ_SEARCH_URL,
+                params={
+                    "w": f"{song.title or ''} {song.artist or ''}".strip(),
+                    "format": "json",
+                    "n": 1,
+                    "p": 1,
+                },
+                headers={
+                    "User-Agent": _NETEASE_HEADERS["User-Agent"],
+                    "Referer": "https://y.qq.com/",
+                },
+            )
+            if resp.status_code != 200:
+                log.debug(f"QQ 搜索: HTTP {resp.status_code}")
+                return None
+            payload = resp.json()
+            songs = ((payload.get("data") or {}).get("song") or {}).get("list") or []
+            if not songs:
+                log.debug("QQ 搜索: 无结果")
+                return None
+            first = songs[0]
+            songmid = first.get("songmid")
+            if not songmid:
+                return None
+            # 标题/歌手基础校验：避免同名误匹配
+            hit_title = str(first.get("songname") or "").strip()
+            if not self._titles_match(song.title, hit_title):
+                log.debug(f"QQ 搜索: 标题不匹配（{hit_title}），跳过")
+                return None
+            log.debug(f"QQ 搜索: 命中 songmid={songmid}")
+            return str(songmid)
+        except Exception as error:
+            log.warning(f"QQ 搜索失败: {error}")
+            return None
+
+    @staticmethod
+    def _titles_match(original: str | None, hit: str) -> bool:
+        """标题基础匹配：去除空白与常见括号后缀后比较包含关系。"""
+        import re
+
+        if not original or not hit:
+            return False
+
+        def norm(s: str) -> str:
+            return re.sub(r"[\s()（）【】\[\]-]", "", s).lower()
+
+        o, h = norm(original), norm(hit)
+        return bool(o and h and (o in h or h in o))
 
     async def _fetch_cover(self, client, song_id: str) -> str | None:
         from . import log

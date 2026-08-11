@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.0-blue?style=flat" alt="version">
+  <img src="https://img.shields.io/badge/version-1.0.1-blue?style=flat" alt="version">
   <img src="https://img.shields.io/badge/python-3.10+-blue?style=flat" alt="python">
   <img src="https://img.shields.io/badge/platform-OneBot--v11-orange?style=flat" alt="platform">
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat" alt="license">
 </p>
 
-<p align="center">多引擎精准音乐识别，支持QQ语音、音/视频文件识曲</p>
+<p align="center">支持视频文件、音频文件、语音消息听歌识曲/音乐识别</p>
 
 <p align="center">
   <img src="https://count.getloli.com/@astrbot_plugin_song_identifier?theme=moebooru" alt="Moe Counter">

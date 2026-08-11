@@ -205,20 +205,43 @@ class MediaMaterializer:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+        except OSError as error:
+            log.warning(f"ffprobe 启动失败: {error}")
+            return None
+        try:
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
-            if process.returncode != 0:
-                log.warning(f"ffprobe 探测失败: returncode={process.returncode}")
-                return None
-            values: dict[str, str] = {}
-            for line in stdout.decode().splitlines():
-                if "=" in line:
-                    key, _, value = line.partition("=")
-                    # stream 段可能输出多条，取最后一个有效值
-                    if value:
-                        values[key.strip()] = value.strip()
-            if "duration" not in values:
-                log.warning("ffprobe 输出缺少 duration")
-                return None
+        except asyncio.TimeoutError:
+            # 与 run_ffmpeg 一致：超时先 terminate，短暂等待后 kill，回收子进程
+            log.warning("ffprobe 探测超时，终止进程")
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                process.kill()
+                await process.wait()
+            return None
+        except asyncio.CancelledError:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                process.kill()
+                await process.wait()
+            raise
+        if process.returncode != 0:
+            log.warning(f"ffprobe 探测失败: returncode={process.returncode}")
+            return None
+        values: dict[str, str] = {}
+        for line in stdout.decode().splitlines():
+            if "=" in line:
+                key, _, value = line.partition("=")
+                # stream 段可能输出多条，取最后一个有效值
+                if value:
+                    values[key.strip()] = value.strip()
+        if "duration" not in values:
+            log.warning("ffprobe 输出缺少 duration")
+            return None
+        try:
             return MediaMetadata(
                 duration=float(values["duration"]),
                 sample_rate=int(values.get("sample_rate", 0) or 0),
@@ -226,8 +249,8 @@ class MediaMaterializer:
                 sample_format=values.get("sample_fmt", ""),
                 size_bytes=path.stat().st_size,
             )
-        except (OSError, ValueError, asyncio.TimeoutError) as error:
-            log.warning(f"ffprobe 探测异常: {error}")
+        except (OSError, ValueError) as error:
+            log.warning(f"ffprobe 解析异常: {error}")
             return None
 
     def _is_temp_path(self, path: Path) -> bool:

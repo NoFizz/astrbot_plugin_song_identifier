@@ -69,8 +69,6 @@ def test_materializer_clamps_max_seconds_to_12():
 @pytest.mark.asyncio
 async def test_cleanup_removes_temp_source_but_not_user_file(tmp_path):
     """识别结束清理 AstrBot temp 源文件，但绝不删除用户本地文件。"""
-    import asyncio
-
     temp_dir = tmp_path / "temp"
     temp_dir.mkdir()
     user_file = tmp_path / "user_recording.amr"
@@ -272,3 +270,47 @@ async def test_probe_tolerates_reordered_and_extra_lines(tmp_path, monkeypatch):
     assert metadata.sample_rate == 16000  # 取最后一个有效值
     assert metadata.channels == 2
     assert metadata.sample_format == "s16"
+
+
+@pytest.mark.asyncio
+async def test_probe_timeout_terminates_process(tmp_path, monkeypatch):
+    """probe 超时必须 terminate 并回收 ffprobe 子进程，不留孤儿进程。"""
+    import asyncio
+
+    audio = tmp_path / "normalized.wav"
+    audio.write_bytes(b"wav")
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        async def communicate(self):
+            # probe 的 wait_for 超时固定为 15s，挂起时间必须超过它才能触发超时
+            await asyncio.sleep(30)  # 永不返回，触发超时
+
+        async def wait(self):
+            if self.terminated or self.killed:
+                self.returncode = 0
+                return 0
+            await asyncio.sleep(10)
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    fake = FakeProcess()
+
+    async def fake_create(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create)
+
+    metadata = await MediaMaterializer(temp_dir=tmp_path).probe(audio)
+
+    assert metadata is None
+    assert fake.terminated is True

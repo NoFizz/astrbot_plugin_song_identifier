@@ -8,7 +8,6 @@ import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
-
 from astrbot_plugin_song_identifier.engines.xfyun_acr import (
     XfyunAcrEngine,
     build_xfyun_authorization,
@@ -137,3 +136,37 @@ async def test_identify_posts_music_request(monkeypatch):
         assert received["app_id"] == "APP"
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_to_mp3_writes_into_artifact_temp_dir(tmp_path, monkeypatch):
+    """MP3 转码必须写入媒体工件所在目录（AstrBot temp），而非系统临时目录。"""
+    from pathlib import Path
+
+    from astrbot_plugin_song_identifier.engines.xfyun_acr import XfyunAcrEngine
+
+    engine = XfyunAcrEngine(app_id="APP", api_key="AK", api_secret="SK", mode="music")
+    calls = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def wait(self):
+            # 模拟真实 ffmpeg：写出输出文件
+            output = Path(calls[-1][-1])
+            output.write_bytes(b"MP3")
+            return self.returncode
+
+    async def fake_create(*args, **kwargs):
+        calls.append(args)
+        return FakeProcess()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create)
+    source = tmp_path / "normalized.wav"
+    source.write_bytes(b"wav")
+
+    out = await engine._to_mp3(source)
+
+    assert out is not None
+    assert out.parent == tmp_path
+    assert out.suffix == ".mp3"

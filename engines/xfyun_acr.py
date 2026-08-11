@@ -5,11 +5,9 @@ import hashlib
 import hmac
 import json
 import os
-import tempfile
 import time
 from collections.abc import Mapping
 from email.utils import formatdate
-from pathlib import Path
 from urllib.parse import quote
 
 import aiohttp
@@ -287,14 +285,15 @@ class XfyunAcrEngine:
             mp3_path.unlink(missing_ok=True)
 
     async def _to_mp3(self, source):
-        """Create a real 16 kHz mono MP3 for the Xfyun lame payload."""
+        """Create a real 16 kHz mono MP3 for the Xfyun lame payload.
+
+        Args:
+            source: 归一化 WAV 源文件路径。
+        """
 
         from ..media import run_ffmpeg
 
-        output = (
-            Path(tempfile.gettempdir())
-            / f"xfyun_{os.getpid()}_{os.urandom(8).hex()}.mp3"
-        )
+        output = source.parent / f"xfyun_{os.getpid()}_{os.urandom(8).hex()}.mp3"
         try:
             code = await run_ffmpeg(
                 [

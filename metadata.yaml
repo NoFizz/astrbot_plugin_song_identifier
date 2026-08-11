@@ -1,7 +1,7 @@
 name: astrbot_plugin_song_identifier
 display_name: 听歌识曲
 desc: 支持视频文件、音频文件、语音消息听歌识曲/音乐识别
-version: 1.0.1
+version: 1.1.0
 author: NoFizz
 repo: https://github.com/NoFizz/astrbot_plugin_song_identifier
 support_platforms:

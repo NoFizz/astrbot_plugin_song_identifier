@@ -28,6 +28,26 @@
 - 📦 **音乐卡片平台回退**：卡片发送支持网易云音乐、QQ 音乐双平台自动降级
 - 🛠 **可观测**：全流程分步日志（媒体转换、引擎尝试、识别结果、输出形式），开启 Debug 日志后每个环节都有详细记录
 
+## 效果展示
+
+支持识别以下三种消息类型（引用后 @bot + 发送「识曲」即可）：
+
+**语音消息**（按住说话发送）
+
+<img src="./screenshots/voice-message.png" width="360">
+
+**音频文件**（上传的音频文件）
+
+<img src="./screenshots/audio-file.png" width="360">
+
+**视频文件**（上传的视频）
+
+<img src="./screenshots/video-file.png" width="360">
+
+三种输出形式效果（文本 / 图片 / 卡片）：
+
+<img src="./screenshots/output-formats.png" width="360">
+
 ## 内容列表
 
 - [安装方法](#安装方法)
@@ -38,6 +58,7 @@
   - [高级设置](#高级设置)
   - [回退链汇总](#回退链汇总)
 - [平台支持](#平台支持)
+- [效果展示](#效果展示)
 - [使用示例](#使用示例)
 - [常见问题](#常见问题)
 - [相关仓库](#相关仓库)
@@ -182,20 +203,6 @@ git clone https://github.com/NoFizz/astrbot_plugin_song_identifier.git
 
 ## 使用示例
 
-本插件支持识别以下三种消息类型（引用后 @bot + 发送「识曲」即可）：
-
-**语音消息**（按住说话发送）
-
-<img src="./screenshots/voice-message.png" width="360">
-
-**音频文件**（上传的音频文件）
-
-<img src="./screenshots/audio-file.png" width="360">
-
-**视频文件**（上传的视频）
-
-<img src="./screenshots/video-file.png" width="360">
-
 **① 关键词直连（最快捷）**
 
 1. 群内发送一段语音（播放歌曲 15 秒以上）或视频
@@ -213,10 +220,6 @@ git clone https://github.com/NoFizz/astrbot_plugin_song_identifier.git
 **③ 私聊**
 
 直接引用消息 + 「识曲」（私聊无需 @bot）。
-
-三种输出形式效果（文本 / 图片 / 卡片）：
-
-<img src="./screenshots/output-formats.png" width="360">
 
 ## 常见问题
 

@@ -314,3 +314,46 @@ async def test_probe_timeout_terminates_process(tmp_path, monkeypatch):
 
     assert metadata is None
     assert fake.terminated is True
+
+
+@pytest.mark.asyncio
+async def test_probe_communicate_oserror_returns_none(tmp_path, monkeypatch):
+    """probe 中 communicate 抛 OSError（如子进程异常死亡致管道损坏）应回收进程并返回 None。"""
+    import asyncio
+
+    audio = tmp_path / "normalized.wav"
+    audio.write_bytes(b"wav")
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        async def communicate(self):
+            raise OSError("pipe broken")
+
+        async def wait(self):
+            if self.terminated or self.killed:
+                self.returncode = 0
+                return 0
+            await asyncio.sleep(10)
+            return 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+    fake = FakeProcess()
+
+    async def fake_create(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create)
+
+    metadata = await MediaMaterializer(temp_dir=tmp_path).probe(audio)
+
+    assert metadata is None
+    assert fake.terminated is True

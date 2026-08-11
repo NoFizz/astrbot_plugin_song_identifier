@@ -210,9 +210,10 @@ class MediaMaterializer:
             return None
         try:
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
-        except asyncio.TimeoutError:
-            # 与 run_ffmpeg 一致：超时先 terminate，短暂等待后 kill，回收子进程
-            log.warning("ffprobe 探测超时，终止进程")
+        except (asyncio.TimeoutError, OSError):
+            # 与 run_ffmpeg 一致：超时或管道读取错误（如子进程异常死亡）时
+            # 先 terminate，短暂等待后 kill，回收子进程
+            log.warning("ffprobe 探测失败，终止进程")
             process.terminate()
             try:
                 await asyncio.wait_for(process.wait(), timeout=5)

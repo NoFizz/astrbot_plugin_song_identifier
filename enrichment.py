@@ -74,22 +74,29 @@ class SongEnricher:
                 if not songs:
                     log.debug("网易云增强: 无搜索结果")
                     return EnrichedSong(song=song)
-                first = songs[0]
-                # 歌手校验：优先选取歌手匹配的候选，防现场版/翻唱/同名误配；
-                # 无匹配候选时保持原行为（取第一条），不降低召回
-                if song.artist:
-                    for cand in songs:
+                # 标题/歌手校验：候选必须与识别结果匹配，全部不匹配则放弃增强。
+                # 网易云对乱码/错误查询也模糊返回结果，无标题校验会产生错歌链接/封面
+                # （与 QQ 路径 Task 3 的标题校验对齐；歌手信息缺失的候选不做歌手判定）。
+                matched: dict | None = None
+                for cand in songs:
+                    if not self._names_match(song.title, str(cand.get("name") or "")):
+                        continue
+                    if song.artist:
                         artist_names = [
                             str(a.get("name") or "")
                             for a in cand.get("artists") or []
                             if isinstance(a, dict)
                         ]
-                        if artist_names and any(
+                        if artist_names and not any(
                             self._names_match(song.artist, n) for n in artist_names
                         ):
-                            first = cand
-                            break
-                song_id = str(first.get("id") or "")
+                            continue
+                    matched = cand
+                    break
+                if matched is None:
+                    log.debug("网易云增强: 无标题/歌手匹配候选，放弃增强")
+                    return EnrichedSong(song=song)
+                song_id = str(matched.get("id") or "")
                 log.debug(f"网易云增强: 命中 id={song_id}")
                 cover = None
                 if song_id:

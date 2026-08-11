@@ -239,8 +239,8 @@ async def test_enrich_picks_artist_matching_netease_candidate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enrich_falls_back_to_first_when_no_artist_match(monkeypatch):
-    """无歌手匹配候选时保持原行为：取第一条结果，不降低召回。"""
+async def test_enrich_returns_empty_when_artist_mismatch(monkeypatch):
+    """标题匹配但歌手不符（翻唱/同名）→ 放弃网易云增强，不产生错歌 ID。"""
     song = _song()
     enricher = SongEnricher()
     payload = {
@@ -257,4 +257,48 @@ async def test_enrich_falls_back_to_first_when_no_artist_match(monkeypatch):
 
     enriched = await enricher.enrich(song)
 
-    assert enriched.netease_id == "1"
+    assert enriched.netease_id is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_returns_empty_when_title_mismatch(monkeypatch):
+    """识别标题与候选全部不匹配（网易云模糊匹配的错歌）→ 放弃增强。"""
+    song = _song()
+    enricher = SongEnricher()
+    payload = {
+        "result": {
+            "songs": [
+                {"id": 1, "name": "完全不同的歌", "artists": [{"name": "さユり"}]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(payload=payload),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    assert enriched.netease_id is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_accepts_title_variant_suffix(monkeypatch):
+    """标题带 (Live) 等常见后缀仍应匹配（防误拒合法结果）。"""
+    song = _song()
+    enricher = SongEnricher()
+    payload = {
+        "result": {
+            "songs": [
+                {"id": 9, "name": "花の塔 (Live)", "artists": [{"name": "さユり"}]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(payload=payload),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    assert enriched.netease_id == "9"

@@ -246,6 +246,8 @@ async def test_shazam_engine_falls_back_to_env_proxy(monkeypatch, tmp_path):
             return {"matches": []}
 
     monkeypatch.setattr("shazamio.Shazam", FakeShazam)
+    for key in ("HTTP_PROXY", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
     artifact = MediaArtifact(Path(tmp_path) / "audio.wav", ())
 
@@ -269,6 +271,8 @@ async def test_shazam_engine_ignores_socks_env_proxy(monkeypatch, tmp_path):
             return {"matches": []}
 
     monkeypatch.setattr("shazamio.Shazam", FakeShazam)
+    for key in ("HTTP_PROXY", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:1080")
     artifact = MediaArtifact(Path(tmp_path) / "audio.wav", ())
 

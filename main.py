@@ -190,27 +190,32 @@ class SongIdentifierPlugin(Star):
             target(string): 要识别的媒体引用消息。传任意非空字符串即可，媒体自动从引用消息获取。
         """
         log.debug(f"LLM 工具被调用: target={target!r}")
-        media = MediaExtractor.extract_media(event)
-        if media is None:
-            log.debug("LLM 工具: 无媒体段")
-            yield event.plain_result(
-                "用户消息中没有可识别的媒体：需要引用（回复）一条包含"
-                "语音/视频/音频文件的消息。"
-            )
-            return
-        result = await self._run_identify(media)
-        if not result.materialize_ok:
-            yield event.plain_result("媒体文件处理失败，请重试。")
-            return
-        if result.outcome.timed_out:
-            yield event.plain_result("识别超时，请稍后重试。")
-            return
-        if result.outcome.song is None:
-            yield event.plain_result("未能识别出歌曲，请确认音频清晰且时长足够。")
-            return
-        # 成功：按 output.format 配置发送（文本/图片/卡片），与关键词直连一致
-        await self._send_result(event, result)
-        log.debug("LLM 工具结果已按配置发送")
+        try:
+            media = MediaExtractor.extract_media(event)
+            if media is None:
+                log.debug("LLM 工具: 无媒体段")
+                yield event.plain_result(
+                    "用户消息中没有可识别的媒体：需要引用（回复）一条包含"
+                    "语音/视频/音频文件的消息。"
+                )
+                return
+            result = await self._run_identify(media)
+            if not result.materialize_ok:
+                yield event.plain_result("媒体文件处理失败，请重试。")
+                return
+            if result.outcome.timed_out:
+                yield event.plain_result("识别超时，请稍后重试。")
+                return
+            if result.outcome.song is None:
+                yield event.plain_result("未能识别出歌曲，请确认音频清晰且时长足够。")
+                return
+            # 成功：按 output.format 配置发送（文本/图片/卡片），与关键词直连一致
+            await self._send_result(event, result)
+            log.debug("LLM 工具结果已按配置发送")
+        except Exception as error:
+            # 与 on_message 一致：工具路径不向上抛异常，回退为友好提示
+            log.error("识曲工具异常", exc=error)
+            yield event.plain_result("识曲出错，请稍后重试。")
 
     async def _send_result(self, event: AstrMessageEvent, result: IdentificationResult):
         """按配置输出识别结果：card / image / text。

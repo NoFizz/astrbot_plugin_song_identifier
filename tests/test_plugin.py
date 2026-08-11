@@ -1,11 +1,11 @@
 """main.py 编排层测试：触发 → 识别 → 增强 → 输出。"""
 
 import pytest
-
-from astrbot.api.message_components import At, Plain, Record, Reply
 from astrbot_plugin_song_identifier.enrichment import EnrichedSong
 from astrbot_plugin_song_identifier.main import SongIdentifierPlugin
 from astrbot_plugin_song_identifier.models import SongInfo
+
+from astrbot.api.message_components import At, Plain, Record, Reply
 
 
 class _FakeIdentifier:
@@ -327,3 +327,23 @@ async def test_on_message_timeout_hint():
 
     assert len(ev.sent) == 1
     assert "超时" in ev.sent[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_identify_song_tool_guards_unexpected_exception():
+    """LLM 工具路径与 on_message 一致：意外异常转为友好提示，不向工具机制抛异常。"""
+    plugin = _make_plugin()
+
+    class _BoomIdentifier:
+        async def identify(self, artifact, session):
+            raise RuntimeError("boom")
+
+    plugin.identifier = _BoomIdentifier()
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    ev = _Event(messages=[reply])
+
+    results = [r async for r in plugin.identify_song(ev, target="1")]
+
+    assert len(results) == 1
+    assert "出错" in results[0]["text"]

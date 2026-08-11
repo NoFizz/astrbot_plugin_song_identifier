@@ -239,8 +239,8 @@ async def test_enrich_picks_artist_matching_netease_candidate(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enrich_returns_empty_when_artist_mismatch(monkeypatch):
-    """标题匹配但歌手不符（翻唱/同名）→ 放弃网易云增强，不产生错歌 ID。"""
+async def test_enrich_falls_back_to_title_matched_when_artist_mismatch(monkeypatch):
+    """标题匹配但歌手不符（跨语言写法/翻唱）→ 回退第一首标题匹配候选，不放弃增强。"""
     song = _song()
     enricher = SongEnricher()
     payload = {
@@ -257,7 +257,36 @@ async def test_enrich_returns_empty_when_artist_mismatch(monkeypatch):
 
     enriched = await enricher.enrich(song)
 
-    assert enriched.netease_id is None
+    # 歌手不符不再导致空增强：回退到标题匹配候选
+    assert enriched.netease_id == "1"
+
+
+@pytest.mark.asyncio
+async def test_enrich_accepts_cross_language_artist(monkeypatch):
+    """跨语言歌手写法（罗马音 vs 片假名）不得导致空增强（线上回归用例）。"""
+    song = SongInfo(
+        title="雑踏、僕らの街",
+        artist="TOGENASHITOGEARI",
+        provider="acrcloud",
+        mode="music",
+    )
+    enricher = SongEnricher()
+    payload = {
+        "result": {
+            "songs": [
+                {"id": 42, "name": "雑踏、僕らの街", "artists": [{"name": "トゲナシトゲアリ"}]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(payload=payload),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    # 歌手跨语言不匹配 → 仍应命中（标题匹配兜底），不产生空增强
+    assert enriched.netease_id == "42"
 
 
 @pytest.mark.asyncio

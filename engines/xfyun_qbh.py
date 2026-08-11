@@ -15,6 +15,10 @@ def build_qbh_headers(
     """Build Xfyun qbh headers for the humming-only AFS engine."""
 
     current = timestamp or str(int(time.time()))
+    # Base64 变体说明：官方文档文字写 MIME Base64，官方 Python demo 用
+    # urlsafe_b64encode。当前固定参数集的 Base64 恰好不含 +/- 字符，两种编码
+    # 等价（golden 测试锁定）。若将来修改 params，必须先验证 standard/urlsafe
+    # 编码是否一致，避免鉴权静默失败。
     params = {"engine_type": "afs", "aue": "raw", "sample_rate": "16000"}
     encoded = base64.b64encode(
         json.dumps(params, separators=(",", ":")).encode()

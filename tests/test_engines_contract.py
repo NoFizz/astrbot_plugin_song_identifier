@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import gzip
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -176,6 +177,25 @@ def test_qbh_parser_classifies_input_error():
         parse_qbh_response({"code": "10107", "desc": "illegal parameter"})
 
     assert raised.value.kind is ErrorKind.INPUT_INVALID
+
+
+def test_qbh_headers_param_base64_golden():
+    """X-Param golden 值：standard 与 urlsafe Base64 对当前固定参数等价。
+
+    官方文档文字写 MIME Base64，官方 Python demo 用 urlsafe_b64encode；
+    当前参数集的 Base64 恰好不含 + / 字符，两种编码输出一致。若将来修改
+    params（如新增字段），必须先验证两种编码是否一致，防止鉴权静默失败。
+    """
+    headers = build_qbh_headers("APP", "KEY", timestamp="1700000000")
+
+    assert (
+        headers["X-Param"]
+        == "eyJlbmdpbmVfdHlwZSI6ImFmcyIsImF1ZSI6InJhdyIsInNhbXBsZV9yYXRlIjoiMTYwMDAifQ=="
+    )
+    assert headers["X-CheckSum"] == hashlib.md5(
+        b"KEY1700000000"
+        + b"eyJlbmdpbmVfdHlwZSI6ImFmcyIsImF1ZSI6InJhdyIsInNhbXBsZV9yYXRlIjoiMTYwMDAifQ=="
+    ).hexdigest()
 
 
 def test_shazam_parser_uses_matches_to_detect_no_result():

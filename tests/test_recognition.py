@@ -5,6 +5,7 @@ from astrbot_plugin_song_identifier.models import ErrorKind, RecognitionError, S
 from astrbot_plugin_song_identifier.recognition import (
     RecognitionCascade,
     RecognitionOutcome,
+    build_engines,
 )
 
 
@@ -236,3 +237,14 @@ async def test_cascade_zero_retries_no_retry(monkeypatch):
 
     assert outcome.song is not None and outcome.song.provider == "b"
     assert e1.calls == 1
+
+
+def test_build_engines_reads_zero_retry_config():
+    """retry_times=0 / retry_interval=0 必须原样生效（0 = 关闭重试）。"""
+    config = {
+        "engines": {"select": {"primary": "留空", "secondary": "留空", "fallback": "留空"}},
+        "advanced": {"retry_times": 0, "retry_interval": 0},
+    }
+    cascade = build_engines(config)
+    assert cascade.max_retries == 0
+    assert cascade.retry_interval == 0.0

@@ -309,8 +309,11 @@ class ResultFormatter:
         from . import log
         from .proxy import resolve_proxy
 
-        retries = max(0, int(self.cfg.get("advanced", {}).get("retry_times", 2) or 2))
-        interval = max(0.0, float(self.cfg.get("advanced", {}).get("retry_interval", 2) or 2))
+        advanced = self.cfg.get("advanced") or {}
+        retry_raw = advanced.get("retry_times")
+        retries = int(retry_raw) if retry_raw is not None else 2
+        interval_raw = advanced.get("retry_interval")
+        interval = float(interval_raw) if interval_raw is not None else 2.0
         proxy = resolve_proxy(self.cfg)
         for attempt in range(retries + 1):
             try:

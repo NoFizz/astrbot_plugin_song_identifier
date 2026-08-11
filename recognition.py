@@ -163,8 +163,11 @@ def build_engines(config: dict) -> RecognitionCascade:
         RecognitionCascade：按配置顺序排列的级联识别器。
     """
     timeout = _cfg_float(config, "advanced", "identify_timeout", 60)
-    max_retries = int(_cfg_float(config, "advanced", "retry_times", 2))
-    retry_interval = _cfg_float(config, "advanced", "retry_interval", 2)
+    max_retries = _cfg_int(config, "advanced", "retry_times", default=2)
+    retry_interval_raw = config.get("advanced", {}).get("retry_interval")
+    retry_interval = (
+        float(str(retry_interval_raw).strip()) if retry_interval_raw is not None else 2.0
+    )
     proxy = resolve_proxy(config)
     engines: list = []
     added: set[str] = set()
@@ -195,5 +198,29 @@ def _cfg_float(config: dict, *keys, default: float = 60.0) -> float:
         return default
     try:
         return float(value)
+    except ValueError:
+        return default
+
+
+def _cfg_int(config: dict, *keys, default: int = 0) -> int:
+    """从嵌套配置读取整数值，缺失或非法时返回 default（保留 0 为合法值）。
+
+    Args:
+        config: 插件配置 dict。
+        *keys: 逐层键路径。
+        default: 缺失或非法时的默认值。
+
+    Returns:
+        解析后的整数值。
+    """
+    node = config
+    for key in keys:
+        if not isinstance(node, dict):
+            return default
+        node = node.get(key)
+        if node is None:
+            return default
+    try:
+        return int(str(node).strip())
     except ValueError:
         return default

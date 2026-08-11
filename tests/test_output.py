@@ -316,3 +316,30 @@ async def test_load_cover_retry_exhausted_returns_none(monkeypatch):
 
     assert cover is None
     assert state["calls"] == 3
+
+
+@pytest.mark.asyncio
+async def test_load_cover_zero_retry_config_no_retry(monkeypatch):
+    """retry_times=0 时封面下载失败不重试。"""
+    state = {"calls": 0}
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            state["calls"] += 1
+            raise ConnectionError("Cannot connect")
+
+    import astrbot_plugin_song_identifier.output as output_module
+
+    monkeypatch.setattr(output_module.aiohttp, "ClientSession", lambda **kw: _FakeSession())
+
+    fmt = ResultFormatter({"advanced": {"retry_times": 0, "retry_interval": 0}})
+    cover = await fmt._load_cover("https://example.com/cover.jpg")
+
+    assert cover is None
+    assert state["calls"] == 1

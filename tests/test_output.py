@@ -223,3 +223,96 @@ async def test_load_cover_sends_referer(monkeypatch):
 
     assert cover is not None
     assert captured["headers"].get("Referer") == "https://music.163.com/"
+
+
+@pytest.mark.asyncio
+async def test_load_cover_retries_transient_errors(monkeypatch):
+    """封面下载网络异常自动重试（默认 2 次，间隔 2 秒）。"""
+    import asyncio
+    from io import BytesIO
+
+    from PIL import Image
+
+    real_sleep = asyncio.sleep
+    state = {"calls": 0}
+    sleeps = []
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.output.asyncio.sleep",
+        lambda s: sleeps.append(s) or real_sleep(0),
+    )
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def read(self):
+            buf = BytesIO()
+            Image.new("RGB", (10, 10), (1, 2, 3)).save(buf, format="JPEG")
+            return buf.getvalue()
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            state["calls"] += 1
+            if state["calls"] < 3:
+                raise ConnectionError("Cannot connect")
+            return _FakeResponse()
+
+    import astrbot_plugin_song_identifier.output as output_module
+
+    monkeypatch.setattr(
+        output_module.aiohttp, "ClientSession", lambda **kw: _FakeSession()
+    )
+
+    fmt = ResultFormatter({"advanced": {}})
+    cover = await fmt._load_cover("https://example.com/cover.jpg")
+
+    assert cover is not None
+    assert state["calls"] == 3  # 1 次 + 重试 2 次
+    assert sleeps == [2.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_load_cover_retry_exhausted_returns_none(monkeypatch):
+    """重试耗尽仍失败 → 返回 None（占位块降级）。"""
+    import asyncio
+
+    real_sleep = asyncio.sleep
+    state = {"calls": 0}
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.output.asyncio.sleep",
+        lambda s: real_sleep(0),
+    )
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            state["calls"] += 1
+            raise ConnectionError("Cannot connect")
+
+    import astrbot_plugin_song_identifier.output as output_module
+
+    monkeypatch.setattr(
+        output_module.aiohttp, "ClientSession", lambda **kw: _FakeSession()
+    )
+
+    fmt = ResultFormatter({"advanced": {}})
+    cover = await fmt._load_cover("https://example.com/cover.jpg")
+
+    assert cover is None
+    assert state["calls"] == 3

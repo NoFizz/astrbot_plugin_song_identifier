@@ -309,31 +309,39 @@ class ResultFormatter:
         from . import log
         from .proxy import resolve_proxy
 
-        try:
-            proxy = resolve_proxy(self.cfg)
-            async with aiohttp.ClientSession(trust_env=True) as session:
-                async with session.get(
-                    url,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                    proxy=proxy,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/120.0 Safari/537.36"
-                        ),
-                        "Referer": "https://music.163.com/",
-                    },
-                ) as resp:
-                    if resp.status != 200:
-                        log.warning(f"图片: 封面 HTTP {resp.status}")
-                        return None
-                    data = await resp.read()
-                    log.debug(f"图片: 封面下载完成 {len(data)} bytes")
-            return Image.open(io.BytesIO(data)).convert("RGB")
-        except Exception as error:
-            log.warning(f"图片: 封面加载异常 {error}")
-            return None
+        retries = max(0, int(self.cfg.get("advanced", {}).get("retry_times", 2) or 2))
+        interval = max(0.0, float(self.cfg.get("advanced", {}).get("retry_interval", 2) or 2))
+        proxy = resolve_proxy(self.cfg)
+        for attempt in range(retries + 1):
+            try:
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    async with session.get(
+                        url,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                        proxy=proxy,
+                        headers={
+                            "User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/120.0 Safari/537.36"
+                            ),
+                            "Referer": "https://music.163.com/",
+                        },
+                    ) as resp:
+                        if resp.status != 200:
+                            # HTTP 错误（如 403 防盗链）重试无意义，直接降级
+                            log.warning(f"图片: 封面 HTTP {resp.status}")
+                            return None
+                        data = await resp.read()
+                log.debug(f"图片: 封面下载完成 {len(data)} bytes")
+                return Image.open(io.BytesIO(data)).convert("RGB")
+            except Exception as error:
+                if attempt < retries:
+                    log.warning(f"图片: 封面下载第 {attempt + 1} 次失败，{interval}s 后重试: {error}")
+                    await asyncio.sleep(interval)
+                    continue
+                log.warning(f"图片: 封面加载异常 {error}")
+                return None
 
 
 class NeteaseCardProvider:

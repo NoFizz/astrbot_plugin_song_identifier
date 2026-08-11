@@ -184,6 +184,18 @@
         "type": "object",
         "hint": "识别性能与媒体处理参数，一般无需修改",
         "items": {
+            "retry_times": {
+                "description": "失败重试次数",
+                "type": "int",
+                "default": 2,
+                "hint": "识别引擎与封面下载遇到网络错误等瞬时故障时自动重试的次数（每次失败额外重试 N 次）；认证/配置/无结果类失败不重试"
+            },
+            "retry_interval": {
+                "description": "失败重试间隔（秒）",
+                "type": "int",
+                "default": 2,
+                "hint": "每次失败重试前的等待秒数"
+            },
             "identify_timeout": {
                 "description": "识别超时（秒）",
                 "type": "int",

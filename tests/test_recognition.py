@@ -77,7 +77,9 @@ async def test_cascade_retryable_error_continues_and_is_recorded():
         ]
     )
     e2 = _FakeEngine([_song("b")])
-    outcome = await RecognitionCascade([e1, e2], timeout=5).identify(None, None)
+    # max_retries=0：本测试只验证"错误被记录且级联继续"，重试行为由
+    # test_cascade_retries_* 覆盖；默认 max_retries=2 会让单结果队列空弹
+    outcome = await RecognitionCascade([e1, e2], timeout=5, max_retries=0).identify(None, None)
 
     assert outcome.song is not None and outcome.song.provider == "b"
     assert len(outcome.errors) == 1
@@ -145,3 +147,92 @@ def test_recognition_outcome_has_expected_fields():
     assert outcome.song is None
     assert outcome.errors == ()
     assert outcome.timed_out is True
+
+
+@pytest.mark.asyncio
+async def test_cascade_retries_retryable_error_then_succeeds(monkeypatch):
+    """可重试错误：同一引擎重试，次数内成功后返回。"""
+    import asyncio
+
+    real_sleep = asyncio.sleep
+    sleeps = []
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.recognition.asyncio.sleep",
+        lambda s: sleeps.append(s) or real_sleep(0),
+    )
+    e1 = _FakeEngine(
+        [
+            RecognitionError(ErrorKind.TEMPORARY_NETWORK, "a", "music", "net", retryable=True),
+            RecognitionError(ErrorKind.TEMPORARY_NETWORK, "a", "music", "net", retryable=True),
+            _song("a"),
+        ]
+    )
+    outcome = await RecognitionCascade([e1], timeout=5, max_retries=2, retry_interval=2).identify(None, None)
+
+    assert outcome.song is not None and outcome.song.provider == "a"
+    assert e1.calls == 3
+    assert sleeps == [2.0, 2.0]
+    assert len(outcome.errors) == 2  # 两次失败均记录
+
+
+@pytest.mark.asyncio
+async def test_cascade_retries_exhausted_returns_errors(monkeypatch):
+    """重试耗尽仍失败：累积全部错误并返回无结果。"""
+    import asyncio
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.recognition.asyncio.sleep",
+        lambda s: real_sleep(0),
+    )
+    e1 = _FakeEngine(
+        [
+            RecognitionError(ErrorKind.TEMPORARY_NETWORK, "a", "music", "net", retryable=True),
+            RecognitionError(ErrorKind.TEMPORARY_NETWORK, "a", "music", "net", retryable=True),
+            RecognitionError(ErrorKind.TEMPORARY_NETWORK, "a", "music", "net", retryable=True),
+        ]
+    )
+    outcome = await RecognitionCascade([e1], timeout=5, max_retries=2, retry_interval=2).identify(None, None)
+
+    assert outcome.song is None
+    assert e1.calls == 3  # 1 次 + 重试 2 次
+    assert len(outcome.errors) == 3
+
+
+@pytest.mark.asyncio
+async def test_cascade_does_not_retry_non_retryable_error(monkeypatch):
+    """非可重试错误（认证等）不重试，直接换下一引擎。"""
+    import asyncio
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.recognition.asyncio.sleep",
+        lambda s: real_sleep(0),
+    )
+    e1 = _FakeEngine([RecognitionError(ErrorKind.AUTH_FAILED, "a", "music", "bad key")])
+    e2 = _FakeEngine([_song("b")])
+    outcome = await RecognitionCascade([e1, e2], timeout=5, max_retries=2, retry_interval=2).identify(None, None)
+
+    assert outcome.song is not None and outcome.song.provider == "b"
+    assert e1.calls == 1  # 不重试
+    assert e2.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cascade_zero_retries_no_retry(monkeypatch):
+    """retry_times=0：不重试，与旧行为一致。"""
+    import asyncio
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.recognition.asyncio.sleep",
+        lambda s: real_sleep(0),
+    )
+    e1 = _FakeEngine(
+        [RecognitionError(ErrorKind.TEMPORARY_NETWORK, "a", "music", "net", retryable=True)]
+    )
+    e2 = _FakeEngine([_song("b")])
+    outcome = await RecognitionCascade([e1, e2], timeout=5, max_retries=0, retry_interval=2).identify(None, None)
+
+    assert outcome.song is not None and outcome.song.provider == "b"
+    assert e1.calls == 1

@@ -23,11 +23,19 @@ class RecognitionOutcome:
 
 
 class RecognitionCascade:
-    """按引擎顺序执行识别，首个命中即停止。"""
+    """按引擎顺序执行识别，首个命中即停止；可重试错误按配置自动重试。"""
 
-    def __init__(self, engines: list, timeout: float):
+    def __init__(
+        self,
+        engines: list,
+        timeout: float,
+        max_retries: int = 2,
+        retry_interval: float = 2.0,
+    ):
         self.engines = engines
         self.timeout = max(0.1, float(timeout))
+        self.max_retries = max(0, int(max_retries))
+        self.retry_interval = max(0.0, float(retry_interval))
 
     async def identify(self, artifact, session) -> RecognitionOutcome:
         from . import log
@@ -47,31 +55,56 @@ class RecognitionCascade:
                     log.warning("级联超时，停止尝试后续引擎")
                     break
                 log.debug(f"正在使用引擎: {provider} ({mode})")
-                try:
-                    remaining = max(0.001, deadline - time.monotonic())
-                    song = await asyncio.wait_for(
-                        engine.identify(artifact, session, deadline), timeout=remaining
-                    )
-                except (asyncio.TimeoutError, TimeoutError):
-                    timed_out = True
-                    errors.append(
-                        RecognitionError(ErrorKind.TIMEOUT, provider, mode, "识别超时")
-                    )
-                    log.warning(f"引擎 {provider} 超时")
-                    break
-                except RecognitionError as error:
-                    errors.append(error)
-                    log.warning(
-                        f"引擎 {provider} 返回错误: {error.message} "
-                        f"(kind={error.kind.value}, code={error.code})"
-                    )
-                    continue
+                # 可重试错误在同一引擎上自动重试（次数/间隔由配置控制），
+                # 重试前检查剩余 deadline，避免超过总超时
+                attempts = 0
+                song = None
+                while True:
+                    attempts += 1
+                    try:
+                        remaining = max(0.001, deadline - time.monotonic())
+                        song = await asyncio.wait_for(
+                            engine.identify(artifact, session, deadline), timeout=remaining
+                        )
+                        break
+                    except (asyncio.TimeoutError, TimeoutError):
+                        timed_out = True
+                        errors.append(
+                            RecognitionError(ErrorKind.TIMEOUT, provider, mode, "识别超时")
+                        )
+                        log.warning(f"引擎 {provider} 超时")
+                        break
+                    except RecognitionError as error:
+                        if (
+                            error.retryable
+                            and attempts <= self.max_retries
+                            and time.monotonic() < deadline
+                        ):
+                            errors.append(error)
+                            sleep_for = min(
+                                self.retry_interval, max(0.001, deadline - time.monotonic())
+                            )
+                            log.warning(
+                                f"引擎 {provider} 第 {attempts} 次失败，"
+                                f"{sleep_for:.1f}s 后重试: {error.message} "
+                                f"(kind={error.kind.value}, code={error.code})"
+                            )
+                            await asyncio.sleep(sleep_for)
+                            continue
+                        errors.append(error)
+                        log.warning(
+                            f"引擎 {provider} 返回错误: {error.message} "
+                            f"(kind={error.kind.value}, code={error.code})"
+                        )
+                        break
                 if song is not None:
                     log.debug(
                         f"引擎 {provider} 识别成功: {song.title} - "
                         f"{song.artist or '未知歌手'}"
                     )
                     return RecognitionOutcome(song=song, errors=tuple(errors))
+                if timed_out:
+                    break
                 log.debug(f"引擎 {provider} 无结果，尝试下一引擎")
         except asyncio.CancelledError:
             raise
@@ -130,6 +163,8 @@ def build_engines(config: dict) -> RecognitionCascade:
         RecognitionCascade：按配置顺序排列的级联识别器。
     """
     timeout = _cfg_float(config, "advanced", "identify_timeout", 60)
+    max_retries = int(_cfg_float(config, "advanced", "retry_times", 2))
+    retry_interval = _cfg_float(config, "advanced", "retry_interval", 2)
     proxy = resolve_proxy(config)
     engines: list = []
     added: set[str] = set()
@@ -139,7 +174,9 @@ def build_engines(config: dict) -> RecognitionCascade:
             continue
         engines.append(_ENGINE_LABELS[label](config, proxy))
         added.add(label)
-    return RecognitionCascade(engines=engines, timeout=timeout)
+    return RecognitionCascade(
+        engines=engines, timeout=timeout, max_retries=max_retries, retry_interval=retry_interval
+    )
 
 
 def _cfg_float(config: dict, *keys, default: float = 60.0) -> float:

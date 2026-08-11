@@ -2,8 +2,12 @@
 
 import pytest
 from astrbot_plugin_song_identifier.enrichment import EnrichedSong
-from astrbot_plugin_song_identifier.main import SongIdentifierPlugin
+from astrbot_plugin_song_identifier.main import (
+    IdentificationResult,
+    SongIdentifierPlugin,
+)
 from astrbot_plugin_song_identifier.models import SongInfo
+from astrbot_plugin_song_identifier.recognition import RecognitionOutcome
 
 from astrbot.api.message_components import At, Plain, Record, Reply
 
@@ -82,6 +86,9 @@ class _Event:
 
     def is_private_chat(self):
         return self._private
+
+    def get_group_id(self):
+        return "group-1"
 
     def plain_result(self, text):
         return {"type": "plain", "text": text}
@@ -347,3 +354,94 @@ async def test_identify_song_tool_guards_unexpected_exception():
 
     assert len(results) == 1
     assert "出错" in results[0]["text"]
+
+
+class _Bot:
+    """记录 call_action 调用，可配置前 N 次失败。"""
+
+    def __init__(self, fail_first=0):
+        self.calls = []
+        self.fail_first = fail_first
+        self.api = self
+
+    async def call_action(self, action, **kwargs):
+        self.calls.append((action, kwargs))
+        if len(self.calls) <= self.fail_first:
+            raise RuntimeError("send failed")
+
+
+def _card_event():
+    record = Record(file="x.amr")
+    reply = Reply(id="1", chain=[record])
+    return _Event(messages=[reply])
+
+
+def _card_enriched():
+    return EnrichedSong(
+        song=SongInfo(title="晴天", artist="周杰伦"),
+        netease_id="163",
+        qq_songmid="qq1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_try_send_card_falls_back_to_secondary():
+    """首选卡片平台发送失败时回退到次选平台。"""
+    plugin = _make_plugin()
+    plugin.config = {
+        "output": {"card_platforms": {"primary": "网易云音乐", "secondary": "QQ音乐"}}
+    }
+    ev = _card_event()
+    ev.bot = _Bot(fail_first=1)  # 首次（网易云）失败
+
+    ok = await plugin._try_send_card(ev, _card_enriched())
+
+    assert ok is True
+    assert len(ev.bot.calls) == 2
+    action, kwargs = ev.bot.calls[0]
+    assert action == "send_group_msg"
+    assert kwargs["group_id"] == "group-1"
+    assert kwargs["message"] == [{"type": "music", "data": {"type": "163", "id": "163"}}]
+    action, kwargs = ev.bot.calls[1]
+    assert kwargs["message"] == [{"type": "music", "data": {"type": "qq", "id": "qq1"}}]
+
+
+@pytest.mark.asyncio
+async def test_try_send_card_returns_false_when_all_fail():
+    """两个卡片平台都失败时返回 False，供 _send_result 降级。"""
+    plugin = _make_plugin()
+    plugin.config = {
+        "output": {"card_platforms": {"primary": "网易云音乐", "secondary": "QQ音乐"}}
+    }
+    ev = _card_event()
+    ev.bot = _Bot(fail_first=99)
+
+    ok = await plugin._try_send_card(ev, _card_enriched())
+
+    assert ok is False
+    assert len(ev.bot.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_send_result_card_failure_degrades_to_text():
+    """卡片全部失败时降级为文本 + 分条试听链接。"""
+    plugin = _make_plugin()
+    plugin.config = {
+        "output": {
+            "format": "卡片",
+            "link": True,
+            "card_platforms": {"primary": "网易云音乐", "secondary": "QQ音乐"},
+        }
+    }
+    ev = _card_event()
+    ev.bot = _Bot(fail_first=99)
+    result = IdentificationResult(
+        outcome=RecognitionOutcome(song=_card_enriched().song),
+        enriched=_card_enriched(),
+    )
+
+    await plugin._send_result(ev, result)
+
+    texts = [s["text"] for s in ev.sent if s["type"] == "plain"]
+    assert any("晴天" in t for t in texts)
+    assert any("🔗" in t for t in texts)

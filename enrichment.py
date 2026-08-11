@@ -65,7 +65,7 @@ class SongEnricher:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     _NETEASE_SEARCH_URL,
-                    params={"s": query, "type": 1, "limit": 1},
+                    params={"s": query, "type": 1, "limit": 5},
                     headers=_NETEASE_HEADERS,
                 )
                 resp.raise_for_status()
@@ -75,6 +75,20 @@ class SongEnricher:
                     log.debug("网易云增强: 无搜索结果")
                     return EnrichedSong(song=song)
                 first = songs[0]
+                # 歌手校验：优先选取歌手匹配的候选，防现场版/翻唱/同名误配；
+                # 无匹配候选时保持原行为（取第一条），不降低召回
+                if song.artist:
+                    for cand in songs:
+                        artist_names = [
+                            str(a.get("name") or "")
+                            for a in cand.get("artists") or []
+                            if isinstance(a, dict)
+                        ]
+                        if artist_names and any(
+                            self._names_match(song.artist, n) for n in artist_names
+                        ):
+                            first = cand
+                            break
                 song_id = str(first.get("id") or "")
                 log.debug(f"网易云增强: 命中 id={song_id}")
                 cover = None

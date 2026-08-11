@@ -213,3 +213,48 @@ async def test_enrich_accepts_qq_when_artist_matches(monkeypatch):
     enriched = await enricher.enrich(song)
 
     assert enriched.qq_songmid == "003abc"
+
+
+@pytest.mark.asyncio
+async def test_enrich_picks_artist_matching_netease_candidate(monkeypatch):
+    """首条结果歌手不符时，应选取歌手匹配的候选（防同名误配）。"""
+    song = _song()
+    enricher = SongEnricher()
+    payload = {
+        "result": {
+            "songs": [
+                {"id": 1, "name": "花の塔", "artists": [{"name": "别人"}]},
+                {"id": 2, "name": "花の塔", "artists": [{"name": "さユり"}]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(payload=payload),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    assert enriched.netease_id == "2"
+
+
+@pytest.mark.asyncio
+async def test_enrich_falls_back_to_first_when_no_artist_match(monkeypatch):
+    """无歌手匹配候选时保持原行为：取第一条结果，不降低召回。"""
+    song = _song()
+    enricher = SongEnricher()
+    payload = {
+        "result": {
+            "songs": [
+                {"id": 1, "name": "花の塔", "artists": [{"name": "别的歌手"}]},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(payload=payload),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    assert enriched.netease_id == "1"

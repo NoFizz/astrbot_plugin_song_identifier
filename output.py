@@ -4,6 +4,7 @@
 不得交叉构造（网易云 ID 不生成 QQ 链接，反之亦然）。
 """
 
+import asyncio
 import io
 import os
 import re
@@ -112,7 +113,7 @@ class ResultFormatter:
         return f"🔗 {url}" if url else None
 
     async def build_image(self, enriched: EnrichedSong) -> bytes | None:
-        """绘制展示用音乐卡片（上封面 + 下歌名/歌手），失败返回 None。"""
+        """绘制输出用音乐卡片（上封面 + 下歌名/歌手），失败返回 None。"""
         from . import log
 
         try:
@@ -122,15 +123,22 @@ class ResultFormatter:
                 cover = await self._load_cover(enriched.cover_url)
                 log.debug(f"图片: 封面加载{'成功' if cover else '失败'}")
 
-            canvas = self._render_card(enriched, cover)
-
-            buffer = io.BytesIO()
-            canvas.save(buffer, format="JPEG", quality=95)
-            log.debug(f"图片: 生成完成 {len(buffer.getvalue())} bytes")
-            return buffer.getvalue()
+            # 渲染与 JPEG 编码为 CPU 密集操作，放入线程池避免阻塞事件循环
+            data = await asyncio.to_thread(self._render_and_encode, enriched, cover)
+            log.debug(f"图片: 生成完成 {len(data)} bytes")
+            return data
         except Exception as error:
             log.warning(f"图片生成失败: {error}")
             return None
+
+    def _render_and_encode(
+        self, enriched: EnrichedSong, cover: Image.Image | None
+    ) -> bytes:
+        """同步渲染并编码为 JPEG（供 asyncio.to_thread 调用）。"""
+        canvas = self._render_card(enriched, cover)
+        buffer = io.BytesIO()
+        canvas.save(buffer, format="JPEG", quality=95)
+        return buffer.getvalue()
 
     # ---------------- 卡片绘制 ----------------
 
@@ -303,7 +311,16 @@ class ResultFormatter:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=10)
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/120.0 Safari/537.36"
+                        ),
+                        "Referer": "https://music.163.com/",
+                    },
                 ) as resp:
                     if resp.status != 200:
                         log.warning(f"图片: 封面 HTTP {resp.status}")

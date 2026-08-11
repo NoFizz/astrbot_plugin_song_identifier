@@ -1,9 +1,6 @@
 """输出层测试：文本/图片/卡片与平台链接隔离。"""
 
-import io
-
 import pytest
-from PIL import Image
 from astrbot_plugin_song_identifier.enrichment import EnrichedSong
 from astrbot_plugin_song_identifier.models import SongInfo
 from astrbot_plugin_song_identifier.output import (
@@ -11,6 +8,7 @@ from astrbot_plugin_song_identifier.output import (
     QQMusicCardProvider,
     ResultFormatter,
 )
+from PIL import Image
 
 
 def _enriched(netease_id=None, qq_songmid=None, cover=None):
@@ -129,3 +127,50 @@ def test_crop_fill_scales_to_target_size():
     img = Image.new("RGB", (300, 300), (200, 80, 40))
     result = ResultFormatter._crop_fill(img, 600, 300)
     assert result.size == (600, 300)
+
+
+@pytest.mark.asyncio
+async def test_load_cover_sends_referer(monkeypatch):
+    """封面下载必须带网易云 Referer，避免 CDN 403。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def read(self):
+            buf = BytesIO()
+            Image.new("RGB", (10, 10), (1, 2, 3)).save(buf, format="JPEG")
+            return buf.getvalue()
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            captured["headers"] = kwargs.get("headers", {})
+            return _FakeResponse()
+
+    import astrbot_plugin_song_identifier.output as output_module
+
+    monkeypatch.setattr(
+        output_module.aiohttp, "ClientSession", lambda **kw: _FakeSession()
+    )
+
+    fmt = _formatter()
+    cover = await fmt._load_cover("https://example.com/cover.jpg")
+
+    assert cover is not None
+    assert captured["headers"].get("Referer") == "https://music.163.com/"

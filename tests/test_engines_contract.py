@@ -232,6 +232,52 @@ async def test_shazam_engine_enforces_deadline(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_shazam_engine_falls_back_to_env_proxy(monkeypatch, tmp_path):
+    """未配置插件代理时，Shazam 必须透传环境变量代理（http/https）。"""
+    from pathlib import Path
+
+    from astrbot_plugin_song_identifier.engines.shazam import ShazamEngine
+
+    captured = {}
+
+    class FakeShazam:
+        async def recognize(self, path, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"matches": []}
+
+    monkeypatch.setattr("shazamio.Shazam", FakeShazam)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    artifact = MediaArtifact(Path(tmp_path) / "audio.wav", ())
+
+    await ShazamEngine().identify(artifact, deadline=None)
+
+    assert captured["kwargs"].get("proxy") == "http://127.0.0.1:7890"
+
+
+@pytest.mark.asyncio
+async def test_shazam_engine_ignores_socks_env_proxy(monkeypatch, tmp_path):
+    """socks 环境变量代理不透传（aiohttp 不支持，直连）。"""
+    from pathlib import Path
+
+    from astrbot_plugin_song_identifier.engines.shazam import ShazamEngine
+
+    captured = {}
+
+    class FakeShazam:
+        async def recognize(self, path, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"matches": []}
+
+    monkeypatch.setattr("shazamio.Shazam", FakeShazam)
+    monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:1080")
+    artifact = MediaArtifact(Path(tmp_path) / "audio.wav", ())
+
+    await ShazamEngine().identify(artifact, deadline=None)
+
+    assert "proxy" not in captured["kwargs"]
+
+
+@pytest.mark.asyncio
 async def test_acrcloud_engine_rejects_expired_deadline_without_request(
     monkeypatch, tmp_path
 ):

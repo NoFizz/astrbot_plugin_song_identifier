@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from collections.abc import Mapping
 
@@ -67,10 +68,28 @@ class ShazamEngine:
             log.debug(f"Shazam 开始识别: {artifact.path.name}")
             # shazamio 0.8.1 的 proxy 参数在 recognize() 而非 Shazam() 构造；
             # 未配置时不传参数，行为与旧版完全一致
-            kwargs: dict = {}
+            request_kwargs: dict = {}
             if self.proxy:
-                kwargs["proxy"] = self.proxy
-            request = Shazam().recognize(str(artifact.path), **kwargs)
+                request_kwargs["proxy"] = self.proxy
+            else:
+                # shazamio 客户端不读环境变量代理（无 trust_env），手动回退；
+                # 仅透传 http/https 代理（socks 需额外依赖，不引入）
+                env_proxy = next(
+                    (
+                        p
+                        for p in (
+                            os.environ.get("HTTPS_PROXY"),
+                            os.environ.get("HTTP_PROXY"),
+                            os.environ.get("https_proxy"),
+                            os.environ.get("http_proxy"),
+                        )
+                        if p and p.startswith(("http://", "https://"))
+                    ),
+                    None,
+                )
+                if env_proxy:
+                    request_kwargs["proxy"] = env_proxy
+            request = Shazam().recognize(str(artifact.path), **request_kwargs)
             if deadline is None:
                 payload = await request
             else:

@@ -127,10 +127,11 @@ def test_enriched_song_without_ids_has_no_links():
     assert enriched.qq_url is None
 
 
-def _qq_hit(songname="花の塔", songmid="003abc"):
-    return {
-        "data": {"song": {"list": [{"songname": songname, "songmid": songmid}]}}
-    }
+def _qq_hit(songname="花の塔", songmid="003abc", singers=None):
+    hit = {"songname": songname, "songmid": songmid}
+    if singers is not None:
+        hit["singer"] = [{"name": s} for s in singers]
+    return {"data": {"song": {"list": [hit]}}}
 
 
 @pytest.mark.asyncio
@@ -172,3 +173,43 @@ async def test_enrich_skips_qq_when_title_mismatch(monkeypatch):
     # 标题不匹配：QQ songmid 为空，但网易云增强不受影响
     assert enriched.qq_songmid is None
     assert enriched.netease_id == "123456"
+
+
+@pytest.mark.asyncio
+async def test_enrich_skips_qq_when_artist_mismatch(monkeypatch):
+    from astrbot_plugin_song_identifier.enrichment import _QQ_SEARCH_URL
+
+    song = _song()
+    enricher = SongEnricher()
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(
+            payload=_netease_hit(),
+            urls={_QQ_SEARCH_URL: _qq_hit(singers=["别人"])},
+        ),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    # 歌手不匹配：QQ songmid 为空，但网易云增强不受影响
+    assert enriched.qq_songmid is None
+    assert enriched.netease_id == "123456"
+
+
+@pytest.mark.asyncio
+async def test_enrich_accepts_qq_when_artist_matches(monkeypatch):
+    from astrbot_plugin_song_identifier.enrichment import _QQ_SEARCH_URL
+
+    song = _song()
+    enricher = SongEnricher()
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient",
+        lambda **kw: _FakeClient(
+            payload=_netease_hit(),
+            urls={_QQ_SEARCH_URL: _qq_hit(singers=["さユり"])},
+        ),
+    )
+
+    enriched = await enricher.enrich(song)
+
+    assert enriched.qq_songmid == "003abc"

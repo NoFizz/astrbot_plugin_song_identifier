@@ -127,9 +127,21 @@ class SongEnricher:
                 return None
             # 标题/歌手基础校验：避免同名误匹配
             hit_title = str(first.get("songname") or "").strip()
-            if not self._titles_match(song.title, hit_title):
+            if not self._names_match(song.title, hit_title):
                 log.debug(f"QQ 搜索: 标题不匹配（{hit_title}），跳过")
                 return None
+            # 歌手校验：同歌名不同歌手的歌曲不得误配 songmid（响应无 singer 时跳过）
+            if song.artist:
+                singers = [
+                    str(s.get("name") or "")
+                    for s in first.get("singer") or []
+                    if isinstance(s, dict)
+                ]
+                if singers and not any(
+                    self._names_match(song.artist, s) for s in singers
+                ):
+                    log.debug(f"QQ 搜索: 歌手不匹配（{singers}），跳过")
+                    return None
             log.debug(f"QQ 搜索: 命中 songmid={songmid}")
             return str(songmid)
         except Exception as error:
@@ -137,8 +149,11 @@ class SongEnricher:
             return None
 
     @staticmethod
-    def _titles_match(original: str | None, hit: str) -> bool:
-        """标题基础匹配：去除空白与常见括号后缀后比较包含关系。"""
+    def _names_match(original: str | None, hit: str) -> bool:
+        """名称基础匹配：去除空白与常见括号后缀后比较包含关系。
+
+        同时用于标题与歌手校验（QQ/网易云增强防同名误配）。
+        """
         import re
 
         if not original or not hit:

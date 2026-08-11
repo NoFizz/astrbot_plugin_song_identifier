@@ -54,6 +54,9 @@ class SongEnricher:
     可生成 music.163.com 试听链接并支持 QQ 音乐 163 卡片。
     """
 
+    def __init__(self, proxy: str | None = None):
+        self.proxy = proxy
+
     async def enrich(self, song: SongInfo) -> EnrichedSong:
         from . import log
 
@@ -62,7 +65,10 @@ class SongEnricher:
             return EnrichedSong(song=song)
         log.debug(f"网易云增强: 查询 '{query}'")
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            kwargs: dict = {"timeout": 10}
+            if self.proxy:
+                kwargs["proxy"] = self.proxy
+            async with httpx.AsyncClient(**kwargs) as client:
                 resp = await client.get(
                     _NETEASE_SEARCH_URL,
                     params={"s": query, "type": 1, "limit": 5},

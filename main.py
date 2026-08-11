@@ -15,6 +15,7 @@ from . import log
 from .enrichment import EnrichedSong, SongEnricher
 from .media import MediaExtractor, MediaMaterializer, TriggerDetector
 from .output import PLATFORM_PROVIDERS, ResultFormatter
+from .proxy import resolve_proxy
 from .recognition import RecognitionOutcome, build_engines
 
 # 全局并发闸门：同时进行的识别请求上限，防止下载带宽/磁盘/ffmpeg/第三方配额被耗尽
@@ -61,7 +62,7 @@ class SongIdentifierPlugin(Star):
         self.identifier = build_engines(config)
         if not self.identifier.engines:
             log.warning("未配置任何识别引擎，请到插件配置中设置 首选/次选/备选 引擎。")
-        self.enricher = SongEnricher()
+        self.enricher = SongEnricher(proxy=resolve_proxy(config))
         self.formatter = ResultFormatter(config)
 
     async def _run_identify(self, media) -> IdentificationResult:
@@ -151,7 +152,7 @@ class SongIdentifierPlugin(Star):
                 total=float(self.config.get("advanced", {}).get("identify_timeout", 60))
             )
             log.debug(f"开始级联识别（超时 {timeout.total}s）")
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
                 outcome = await self.identifier.identify(artifact, session)
             log.debug(
                 f"级联识别结束: song={'有' if outcome.song else '无'}, "

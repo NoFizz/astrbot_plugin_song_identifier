@@ -113,10 +113,13 @@ class AcrcloudEngine:
     provider = "acrcloud"
     mode = "music"
 
-    def __init__(self, host: str, access_key: str, access_secret: str):
+    def __init__(
+        self, host: str, access_key: str, access_secret: str, proxy: str | None = None
+    ):
         self.host = host.strip()
         self.access_key = access_key.strip()
         self.access_secret = access_secret.strip()
+        self.proxy = proxy
 
     def is_configured(self) -> bool:
         """Return whether all required credentials are present."""
@@ -167,6 +170,7 @@ class AcrcloudEngine:
                 url.rstrip("/") + "/v1/identify",
                 data=form,
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                proxy=self.proxy,
             ) as response:
                 text = await response.text()
                 log.debug(f"ACRCloud 响应: HTTP {response.status}, {len(text)} bytes")

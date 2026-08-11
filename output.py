@@ -307,12 +307,15 @@ class ResultFormatter:
 
     async def _load_cover(self, url: str):
         from . import log
+        from .proxy import resolve_proxy
 
         try:
-            async with aiohttp.ClientSession() as session:
+            proxy = resolve_proxy(self.cfg)
+            async with aiohttp.ClientSession(trust_env=True) as session:
                 async with session.get(
                     url,
                     timeout=aiohttp.ClientTimeout(total=10),
+                    proxy=proxy,
                     headers={
                         "User-Agent": (
                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

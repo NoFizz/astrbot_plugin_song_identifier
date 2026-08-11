@@ -312,6 +312,26 @@ async def test_enrich_returns_empty_when_title_mismatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_enrich_passes_proxy_to_httpx_client(monkeypatch):
+    """配置代理时，httpx.AsyncClient 必须收到 proxy 参数。"""
+    captured = {}
+
+    class _Client(_FakeClient):
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+            super().__init__(payload=_netease_hit())
+
+    monkeypatch.setattr(
+        "astrbot_plugin_song_identifier.enrichment.httpx.AsyncClient", _Client
+    )
+    enricher = SongEnricher(proxy="http://127.0.0.1:7890")
+
+    await enricher.enrich(_song())
+
+    assert captured["kwargs"].get("proxy") == "http://127.0.0.1:7890"
+
+
+@pytest.mark.asyncio
 async def test_enrich_accepts_title_variant_suffix(monkeypatch):
     """标题带 (Live) 等常见后缀仍应匹配（防误拒合法结果）。"""
     song = _song()

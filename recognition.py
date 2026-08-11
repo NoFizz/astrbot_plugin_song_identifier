@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from .engines import AcrcloudEngine, ShazamEngine, XfyunAcrEngine, XfyunQbhEngine
 from .models import ErrorKind, RecognitionError, SongInfo
+from .proxy import resolve_proxy
 
 
 @dataclass(slots=True)
@@ -79,27 +80,31 @@ class RecognitionCascade:
 
 # 配置下拉中文标签 → 引擎构造器
 _ENGINE_LABELS = {
-    "ACRCloud": lambda cfg: AcrcloudEngine(
+    "ACRCloud": lambda cfg, proxy: AcrcloudEngine(
         host=_cfg_str(cfg, "engines", "acrcloud", "host"),
         access_key=_cfg_str(cfg, "engines", "acrcloud", "access_key"),
         access_secret=_cfg_str(cfg, "engines", "acrcloud", "access_secret"),
+        proxy=proxy,
     ),
-    "Shazam": lambda cfg: ShazamEngine(),
-    "讯飞开放平台/ACRCloud": lambda cfg: XfyunAcrEngine(
+    "Shazam": lambda cfg, proxy: ShazamEngine(proxy=proxy),
+    "讯飞开放平台/ACRCloud": lambda cfg, proxy: XfyunAcrEngine(
         app_id=_cfg_str(cfg, "engines", "xfyun", "app_id"),
         api_key=_cfg_str(cfg, "engines", "xfyun", "api_key"),
         api_secret=_cfg_str(cfg, "engines", "xfyun", "api_secret"),
         mode="music",
+        proxy=proxy,
     ),
-    "讯飞开放平台/ACRCloud·哼唱": lambda cfg: XfyunAcrEngine(
+    "讯飞开放平台/ACRCloud·哼唱": lambda cfg, proxy: XfyunAcrEngine(
         app_id=_cfg_str(cfg, "engines", "xfyun", "app_id"),
         api_key=_cfg_str(cfg, "engines", "xfyun", "api_key"),
         api_secret=_cfg_str(cfg, "engines", "xfyun", "api_secret"),
         mode="humming",
+        proxy=proxy,
     ),
-    "讯飞开放平台/自研": lambda cfg: XfyunQbhEngine(
+    "讯飞开放平台/自研": lambda cfg, proxy: XfyunQbhEngine(
         app_id=_cfg_str(cfg, "engines", "xfyun", "app_id"),
         api_key=_cfg_str(cfg, "engines", "xfyun", "api_key"),
+        proxy=proxy,
     ),
 }
 
@@ -125,13 +130,14 @@ def build_engines(config: dict) -> RecognitionCascade:
         RecognitionCascade：按配置顺序排列的级联识别器。
     """
     timeout = _cfg_float(config, "advanced", "identify_timeout", 60)
+    proxy = resolve_proxy(config)
     engines: list = []
     added: set[str] = set()
     for slot in ("primary", "secondary", "fallback"):
         label = _cfg_str(config, "engines", "select", slot)
         if label == "留空" or label not in _ENGINE_LABELS or label in added:
             continue
-        engines.append(_ENGINE_LABELS[label](config))
+        engines.append(_ENGINE_LABELS[label](config, proxy))
         added.add(label)
     return RecognitionCascade(engines=engines, timeout=timeout)
 

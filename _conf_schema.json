@@ -201,6 +201,12 @@
                 "type": "bool",
                 "default": false,
                 "hint": "开启后输出详细分步日志（媒体处理、引擎请求、响应内容等），便于排查问题；关闭后仅输出开始识曲、识别成功/失败等基础日志"
+            },
+            "proxy": {
+                "description": "HTTP 代理地址",
+                "type": "string",
+                "default": "",
+                "hint": "如 http://127.0.0.1:7890；留空时回退环境变量 HTTP_PROXY/HTTPS_PROXY，再回退直连。网易云/QQ 搜索、封面下载、识别引擎请求统一生效"
             }
         }
     }

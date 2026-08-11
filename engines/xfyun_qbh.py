@@ -77,9 +77,10 @@ class XfyunQbhEngine:
     mode = "humming"
     url = "https://webqbh.xfyun.cn/v1/service/v1/qbh"
 
-    def __init__(self, app_id: str, api_key: str):
+    def __init__(self, app_id: str, api_key: str, proxy: str | None = None):
         self.app_id = app_id.strip()
         self.api_key = api_key.strip()
+        self.proxy = proxy
 
     def is_configured(self) -> bool:
         """Return whether qbh credentials are present."""
@@ -118,6 +119,7 @@ class XfyunQbhEngine:
                 data=audio,
                 headers=build_qbh_headers(self.app_id, self.api_key),
                 timeout=aiohttp.ClientTimeout(total=timeout),
+                proxy=self.proxy,
             ) as response:
                 text = await response.text()
                 log.debug(f"qbh 响应: HTTP {response.status}, {len(text)} bytes")

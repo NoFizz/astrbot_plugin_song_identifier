@@ -48,6 +48,9 @@ class ShazamEngine:
     provider = "shazam"
     mode = "music"
 
+    def __init__(self, proxy: str | None = None):
+        self.proxy = proxy
+
     def is_configured(self) -> bool:
         """ShazamIO does not require user credentials."""
 
@@ -62,7 +65,12 @@ class ShazamEngine:
             from shazamio import Shazam
 
             log.debug(f"Shazam 开始识别: {artifact.path.name}")
-            request = Shazam().recognize(str(artifact.path))
+            # shazamio 0.8.1 的 proxy 参数在 recognize() 而非 Shazam() 构造；
+            # 未配置时不传参数，行为与旧版完全一致
+            kwargs: dict = {}
+            if self.proxy:
+                kwargs["proxy"] = self.proxy
+            request = Shazam().recognize(str(artifact.path), **kwargs)
             if deadline is None:
                 payload = await request
             else:

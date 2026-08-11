@@ -122,6 +122,55 @@ async def test_build_image_with_cover_succeeds():
     assert image[:2] == b"\xff\xd8"
 
 
+@pytest.mark.asyncio
+async def test_load_cover_passes_proxy(monkeypatch):
+    """配置代理时封面下载必须传 proxy；未配置时 proxy 为 None（回退环境变量）。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    captured = {}
+
+    class _FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def read(self):
+            buf = BytesIO()
+            Image.new("RGB", (10, 10), (1, 2, 3)).save(buf, format="JPEG")
+            return buf.getvalue()
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            captured["kwargs"] = kwargs
+            return _FakeResponse()
+
+    import astrbot_plugin_song_identifier.output as output_module
+
+    monkeypatch.setattr(
+        output_module.aiohttp, "ClientSession", lambda **kw: _FakeSession()
+    )
+
+    fmt = ResultFormatter({"advanced": {"proxy": "http://127.0.0.1:7890"}})
+    await fmt._load_cover("https://example.com/cover.jpg")
+    assert captured["kwargs"].get("proxy") == "http://127.0.0.1:7890"
+
+    fmt2 = ResultFormatter({"advanced": {}})
+    await fmt2._load_cover("https://example.com/cover.jpg")
+    assert captured["kwargs"].get("proxy") is None
+
+
 def test_crop_fill_scales_to_target_size():
     """裁切后必须缩放到目标尺寸（cover 语义），保证合成尺寸一致。"""
     img = Image.new("RGB", (300, 300), (200, 80, 40))

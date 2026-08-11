@@ -147,7 +147,14 @@ class XfyunAcrEngine:
         "humming": "/v1/private/s9884ba49",
     }
 
-    def __init__(self, app_id: str, api_key: str, api_secret: str, mode: str):
+    def __init__(
+        self,
+        app_id: str,
+        api_key: str,
+        api_secret: str,
+        mode: str,
+        proxy: str | None = None,
+    ):
         if mode not in self.PATHS:
             raise ValueError(f"unsupported Xfyun mode: {mode}")
         self.app_id = app_id.strip()
@@ -158,6 +165,7 @@ class XfyunAcrEngine:
         self.host = self.HOST
         self.path = self.PATHS[mode]
         self.base_url = f"https://{self.host}"
+        self.proxy = proxy
 
     def is_configured(self) -> bool:
         """Return whether all required credentials are present."""
@@ -211,6 +219,7 @@ class XfyunAcrEngine:
                     url,
                     json=body,
                     timeout=aiohttp.ClientTimeout(total=timeout),
+                    proxy=self.proxy,
                 ) as response:
                     text = await response.text()
                     log.debug(
